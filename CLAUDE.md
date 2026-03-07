@@ -84,8 +84,23 @@ Tell the user to:
 - `SEND_WINDOW=3` — seconds the send window stays open after text is detected
 - `SAVE_WATCHDOG=180` — seconds before auto-reset if 2nd press never happens
 
-## Debugging
+## Troubleshooting
 
-```bash
-cat /tmp/dji-dictation/debug.log
-```
+Debug log: `cat /tmp/dji-dictation/debug.log`
+
+If the user reports issues, check these in order:
+
+1. **Button does nothing** → Karabiner needs **Input Monitoring** permission. Check System Settings → Privacy & Security → Input Monitoring.
+2. **Button changes volume instead of triggering dictation** → Device not grabbed. Verify `"is_consumer": true, "ignore": false` in karabiner.json devices. Check Karabiner log for `grabbed` status.
+3. **No sound / no window shake after dictation** → `/usr/bin/osascript` or the terminal app needs **Accessibility** permission. Check System Settings → Privacy & Security → Accessibility.
+4. **Sound plays but window doesn't shake** → Some Electron apps (like Feishu/Lark) have invisible overlay windows. The script already filters for `AXStandardWindow`. If another app has this issue, inspect its windows and add handling.
+5. **Log shows `baseline=-1` repeatedly** → pyobjc not installed or `PYTHON3` path is wrong. Verify: `$PYTHON3 -c "import ApplicationServices; print('ok')"`.
+6. **Enter doesn't send** → Terminal app (iTerm2 / Terminal.app) needs **Accessibility** permission.
+
+### Required permissions checklist
+
+All in **System Settings → Privacy & Security**:
+
+- **Input Monitoring**: Karabiner-Elements, karabiner_grabber
+- **Accessibility**: Karabiner-Elements, terminal app (iTerm2 / Terminal.app)
+- **Dictation**: System Settings → Keyboard → Dictation → On

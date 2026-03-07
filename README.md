@@ -89,11 +89,33 @@ Find your device's vendor_id and product_id:
 
 Then tell your AI assistant to update the config with your device's IDs.
 
-## Debugging
+## Troubleshooting
+
+Check the debug log first:
 
 ```bash
 cat /tmp/dji-dictation/debug.log
 ```
+
+### Checklist if something doesn't work
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Button does nothing | Karabiner can't see the device | Grant **Input Monitoring** permission to Karabiner in System Settings → Privacy & Security |
+| Button changes volume instead of dictation | Device not configured in Karabiner | Ensure `"is_consumer": true, "ignore": false` in karabiner.json devices section |
+| Dictation works but no "Tink" sound / no window shake | Accessibility permission missing | Grant **Accessibility** permission to `/usr/bin/osascript` (or the terminal app running the script) |
+| "Tink" plays but window doesn't shake | App has non-standard windows (e.g. Electron overlay) | Already handled for Feishu/Lark; [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) for other apps |
+| Log shows `baseline=-1` and never detects text | pyobjc not installed or wrong python path | Run `pip install pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices` and update `PYTHON3=` path in the script |
+| Window shakes but Enter doesn't send | Terminal app needs Accessibility permission | Grant **Accessibility** to your terminal (iTerm2 / Terminal.app) |
+| Enter sends to wrong app | Old behavior, should not happen in latest version | Update to latest version from this repo |
+
+### Permissions checklist
+
+All of these must be granted in **System Settings → Privacy & Security**:
+
+1. **Input Monitoring** → Karabiner-Elements, karabiner_grabber
+2. **Accessibility** → Karabiner-Elements, your terminal app (iTerm2 / Terminal.app)
+3. **Dictation** → System Settings → Keyboard → Dictation → On
 
 ## License
 

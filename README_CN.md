@@ -72,11 +72,32 @@
 
 然后告诉你的 AI 助手用你的设备 ID 更新配置。
 
-## 调试
+## 问题排查
+
+先看调试日志：
 
 ```bash
 cat /tmp/dji-dictation/debug.log
 ```
+
+### 不工作时的排查清单
+
+| 现象 | 可能原因 | 解决方法 |
+|------|---------|---------|
+| 按按钮没反应 | Karabiner 看不到设备 | 系统设置 → 隐私与安全 → 输入监控，给 Karabiner 授权 |
+| 按按钮只调音量 | 设备未在 Karabiner 中配置 | 确认 karabiner.json 的 devices 里有 `"is_consumer": true, "ignore": false` |
+| 听写正常但没有提示音/窗口不抖 | 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 `/usr/bin/osascript` 或终端 App 授权 |
+| 有提示音但窗口不抖 | App 有非标准窗口（如 Electron 水印层） | 飞书已适配；其他 App 欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
+| 日志一直显示 `baseline=-1` | pyobjc 未安装或 python 路径错误 | 执行 `pip install pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices`，更新脚本中的 `PYTHON3=` 路径 |
+| 窗口抖了但 Enter 没发出去 | 终端 App 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 iTerm2 / Terminal.app 授权 |
+
+### 权限清单
+
+以下权限都需要在**系统设置 → 隐私与安全**中授予：
+
+1. **输入监控** → Karabiner-Elements、karabiner_grabber
+2. **辅助功能** → Karabiner-Elements、你的终端 App（iTerm2 / Terminal.app）
+3. **听写** → 系统设置 → 键盘 → 听写 → 开启
 
 ## 许可
 
