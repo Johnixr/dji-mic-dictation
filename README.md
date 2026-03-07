@@ -4,15 +4,21 @@ Turn your DJI Mic Mini into a wireless dictation remote for macOS. Press the but
 
 Works with any app: Claude Code, WeChat, Slack, VS Code, Notes, etc.
 
+[中文文档](README_CN.md)
+
 ## Don't install this manually
 
 Seriously, don't read through all these config files and try to set them up by hand.
 
-**Just send this repo to your AI coding assistant** (Claude Code, Codex, Cursor, etc.) and say:
+**Copy this command and paste it to your AI coding assistant:**
 
-> "Help me set up this DJI Mic Mini dictation project on my Mac"
+```
+帮我配置 DJI Mic Mini 语音听写，项目在 https://github.com/Johnixr/dji-mic-dictation
+```
 
 It will handle everything: install Karabiner, copy scripts, merge configs, grant permissions. That's the whole point.
+
+> Works with Claude Code, Codex, Cursor, Windsurf, or any AI coding assistant that can read URLs.
 
 ## 3 Steps to Vibe Coding
 
@@ -33,13 +39,7 @@ Free tier: 4,000 characters/week. Pro: $12/month.
 
 ### Step 3: Send this repo to your AI
 
-Copy this repo's URL and paste it to Claude Code or your AI assistant of choice:
-
-```
-https://github.com/Johnixr/dji-mic-dictation
-```
-
-Tell it to set things up. Done.
+Copy and paste the command above into your AI assistant. Done.
 
 ## How it works
 
@@ -69,6 +69,7 @@ One physical button, three virtual actions, powered by a time-window state machi
 ```
 dji-mic-dictation/
 ├── README.md                      # You're reading this
+├── README_CN.md                   # 中文文档
 ├── CLAUDE.md                      # Instructions for AI assistants
 ├── scripts/
 │   └── dictation-enter.sh         # Main script (save/tap/enter)
@@ -98,5 +99,7 @@ cat /tmp/dji-dictation/debug.log
 MIT
 
 ## Credits
+
+Created by [Johnixr](https://github.com/Johnixr) and [notdp](https://github.com/notdp).
 
 Built with [Claude Code](https://claude.ai/claude-code) via pure voice-driven Vibe Coding.
