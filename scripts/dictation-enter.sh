@@ -50,17 +50,18 @@ frontmost_bundle() {
 
 # Shake the frontmost window (visual feedback)
 shake_window() {
-  /usr/bin/osascript <<'AS' 2>/dev/null &
+  /usr/bin/osascript <<'AS' 2>/dev/null
 tell application "System Events"
   set fp to first application process whose frontmost is true
   set fw to first window of fp
   set {x, y} to position of fw
   repeat 6 times
     set position of fw to {x + 4, y}
-    delay 0.005
+    delay 0.02
     set position of fw to {x - 4, y}
-    delay 0.005
+    delay 0.02
   end repeat
+  delay 0.03
   set position of fw to {x, y}
 end tell
 AS
