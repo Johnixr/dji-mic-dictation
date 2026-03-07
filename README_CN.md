@@ -2,7 +2,7 @@
 
 把 DJI Mic Mini 变成 macOS 无线听写遥控器。按一下胸口的按钮开始听写，再按一下停止，第三下发送——全程不碰键盘。
 
-适用于任何 App：Claude Code、微信、Slack、VS Code、备忘录等。
+适用于任何接受文字输入的 App：Claude Code、微信、飞书、Telegram、Slack、VS Code、备忘录等。如果发现不兼容的软件，欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) 或提交 PR！
 
 [English](README.md)
 

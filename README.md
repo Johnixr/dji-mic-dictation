@@ -2,7 +2,7 @@
 
 Turn your DJI Mic Mini into a wireless dictation remote for macOS. Press the button on your chest to start dictation, press again to stop, and one more press to send — all without touching your keyboard.
 
-Works with any app: Claude Code, WeChat, Slack, VS Code, Notes, etc.
+Works with any app that accepts text input: Claude Code, WeChat, Feishu/Lark, Telegram, Slack, VS Code, Notes, and more. If you find an app that doesn't work, [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) or submit a PR!
 
 [中文文档](README_CN.md)
 
