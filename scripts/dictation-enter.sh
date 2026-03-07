@@ -1,5 +1,5 @@
 #!/bin/bash
-# DJI MIC MINI dictation helper — tmux + GUI dual mode
+# DJI MIC MINI dictation helper — tmux + GUI mode
 #
 # Usage (called by Karabiner):
 #   dictation-enter.sh save       — 1st press: detect mode (tmux or gui)
@@ -9,18 +9,10 @@
 #
 # tmux mode: poll capture-pane, send via send-keys
 # gui mode:  poll Typeless DB, send via osascript keystroke return
-#
-# Modes:
-#   - tmux:  frontmost app is a terminal with tmux → capture-pane polling
-#   - gui:   any other app (WeChat, Slack, etc.) → Typeless DB polling
-#
-# iTerm2 special handling:
-#   - tmux -CC integration windows (name starts with "↣") → tmux mode
-#   - plain iTerm2 tabs → gui mode
 
 STATE_DIR="/tmp/dji-dictation"
 LOG="$STATE_DIR/debug.log"
-TMUX_BIN="${TMUX_BIN:-/opt/homebrew/bin/tmux}"
+TMUX_BIN="/opt/homebrew/bin/tmux"
 KCLI="/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli"
 TYPELESS_DB="$HOME/Library/Application Support/Typeless/typeless.db"
 CONFIRM_WINDOW=2
@@ -38,7 +30,7 @@ kill_old_watcher() {
   /bin/rm -f "$STATE_DIR/watcher.pid"
 }
 
-cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts}; }
+cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,pane_baseline}; }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
@@ -46,6 +38,10 @@ active_tmux_pane() {
   $TMUX_BIN list-panes -a \
     -F '#{session_attached} #{window_active} #{pane_active} #{pane_id}' 2>/dev/null \
     | awk '$1==1 && $2==1 && $3==1 {print $4; exit}'
+}
+
+typeless_latest_id() {
+  sqlite3 "$TYPELESS_DB" "SELECT id FROM history ORDER BY created_at DESC LIMIT 1;" 2>/dev/null
 }
 
 typeless_check_done() {
@@ -61,7 +57,7 @@ gui_send_enter() {
   case "$bundle" in
     com.googlecode.iterm2)
       /usr/bin/osascript -e \
-        'tell app "iTerm" to tell current window to tell current session to write text ""' 2>/dev/null
+        'tell application "iTerm2" to tell current window to tell current session to write text ""' 2>/dev/null
       ;;
     *)
       /usr/bin/osascript -e \
@@ -96,6 +92,7 @@ case "$1" in
     if [ -n "$pane" ]; then
       write_file mode tmux
       write_file pane_id "$pane"
+      $TMUX_BIN capture-pane -t "$pane" -p 2>/dev/null > "$STATE_DIR/pane_baseline"
       log "save mode=tmux pane=${pane} app=${front_bundle}"
     else
       write_file mode gui
@@ -117,7 +114,7 @@ case "$1" in
       pane="$(read_file pane_id)"
       [ -n "$pane" ] || { cleanup; exit 0; }
 
-      prev="$($TMUX_BIN capture-pane -t "$pane" -p 2>/dev/null)"
+      prev="$(/bin/cat "$STATE_DIR/pane_baseline" 2>/dev/null)"
       log "watch mode=tmux pane=${pane} polling"
 
       changed=0 i=0
@@ -133,6 +130,7 @@ case "$1" in
       set_vars '{"dji_watching":0}'
 
       if [ $changed -eq 1 ]; then
+        /bin/sleep 0.15
         if [ -f "$STATE_DIR/pending_confirm" ]; then
           $TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
           log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s)"
@@ -167,6 +165,7 @@ case "$1" in
       set_vars '{"dji_watching":0}'
 
       if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+        /bin/sleep 0.15
         if [ -f "$STATE_DIR/pending_confirm" ]; then
           gui_send_enter
           log "watch gui preconfirm_send (${i} polls ~$((i / 10))s)"
