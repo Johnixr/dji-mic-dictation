@@ -1,28 +1,24 @@
 #!/bin/bash
-# DJI MIC MINI dictation helper — universal version
+# DJI MIC MINI dictation helper
 #
 # Usage (called by Karabiner):
-#   dictation-enter.sh save   — 1st press: just record frontmost app (no timer)
-#   dictation-enter.sh tap    — 2nd press: end dictation, start time window
-#   dictation-enter.sh enter  — in window: send Enter to saved app
-#
-# Time window logic (managed via Karabiner variable dji_in_window):
-#   Timer starts on 2nd press (tap), not 1st press (save).
-#   After tap, wait TAP_WINDOW_MIN seconds, then open window for
-#   (TAP_WINDOW_MAX - TAP_WINDOW_MIN) seconds. During this window,
-#   next press sends Enter instead of Fn.
+#   dictation-enter.sh save   — 1st press: mark dictation started
+#   dictation-enter.sh tap    — 2nd press: end dictation, wait for text, open send window
+#   dictation-enter.sh enter  — in window: send Enter to current frontmost app
 #
 # Karabiner rules:
 #   dji_active=0            + press → Fn + save + dji_active=1
-#   dji_active=1, window=0  + press → Fn + tap  (ends dictation, starts timer)
+#   dji_active=1, window=0  + press → Fn + tap  (ends dictation, polls for text)
 #   dji_active=1, window=1  + press → enter + reset (no Fn!)
 
 STATE_DIR="/tmp/dji-dictation"
 LOG="$STATE_DIR/debug.log"
-TAP_WINDOW_MIN=3  # seconds before window opens
-TAP_WINDOW_MAX=6  # seconds when window closes
+POLL_INTERVAL=0.2   # seconds between char count checks
+SEND_WINDOW=6       # seconds the send window stays open
+SAVE_WATCHDOG=180   # seconds before save auto-resets
 
 KARABINER_CLI="/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli"
+PYTHON3="/opt/homebrew/Caskroom/miniforge/base/bin/python3"
 
 /bin/mkdir -p "$STATE_DIR"
 
@@ -33,81 +29,116 @@ write_file() { /usr/bin/printf '%s' "$2" > "$STATE_DIR/$1"; }
 
 kill_old_timer() {
   local pid; pid="$(read_file timer.pid)"
-  [ -n "$pid" ] && /bin/kill "$pid" 2>/dev/null
+  if [ -n "$pid" ]; then
+    # kill 整个进程组（包括 osascript 子进程）
+    /bin/kill -- -"$pid" 2>/dev/null
+    /bin/kill "$pid" 2>/dev/null
+  fi
   /bin/rm -f "$STATE_DIR/timer.pid"
 }
 
-cleanup() { /bin/rm -f "$STATE_DIR"/{app_bundle,timer.pid}; }
+cleanup() { /bin/rm -f "$STATE_DIR"/{timer.pid,win_pos}; }
 
 set_vars() {
   "$KARABINER_CLI" --set-variables "$1" 2>/dev/null
 }
 
-frontmost_bundle() {
-  /usr/bin/osascript -e \
-    'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null
+# 获取当前焦点输入框的字符数
+get_char_count() {
+  "$PYTHON3" -c "
+import ApplicationServices as AX
+from Cocoa import NSWorkspace
+app = NSWorkspace.sharedWorkspace().frontmostApplication()
+ref = AX.AXUIElementCreateApplication(app.processIdentifier())
+_, el = AX.AXUIElementCopyAttributeValue(ref, 'AXFocusedUIElement', None)
+if el:
+    _, n = AX.AXUIElementCopyAttributeValue(el, 'AXNumberOfCharacters', None)
+    print(n if n else -1)
+else:
+    print(-1)
+" 2>/dev/null
 }
 
-# Shake the frontmost window (visual feedback)
+# 保存当前窗口位置并震动（跳过非标准窗口如水印层）
 shake_window() {
-  /usr/bin/osascript <<'AS' 2>/dev/null
-tell application "System Events"
-  set fp to first application process whose frontmost is true
-  set fw to first window of fp
-  set {x, y} to position of fw
-  repeat 6 times
-    set position of fw to {x + 4, y}
-    delay 0.01
-    set position of fw to {x - 4, y}
-    delay 0.01
-  end repeat
-  delay 0.05
-  set position of fw to {x, y}
-  delay 0.05
-  set position of fw to {x, y}
-end tell
-AS
+  /usr/bin/osascript -l JavaScript <<JS 2>/dev/null
+var se = Application("System Events");
+var fp = se.processes.whose({frontmost: true})[0];
+var wins = fp.windows();
+var fw = null;
+for (var i = 0; i < wins.length; i++) {
+  if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
+}
+if (!fw && wins.length > 0) fw = wins[0];
+if (!fw) { "no window"; } else {
+  var pos = fw.position();
+  var x = pos[0], y = pos[1];
+  // 保存原始位置到文件，供 enter 快速归位
+  var app = Application.currentApplication();
+  app.includeStandardAdditions = true;
+  app.doShellScript("printf '%s %s' " + x + " " + y + " > ${STATE_DIR}/win_pos");
+  for (var r = 0; r < 6; r++) {
+    fw.position = [x + 4, y]; delay(0.01);
+    fw.position = [x - 4, y]; delay(0.01);
+  }
+  delay(0.05); fw.position = [x, y];
+  delay(0.05); fw.position = [x, y];
+  "ok";
+}
+JS
 }
 
-# Send Return key to a specific app
-send_enter_to_app() {
-  local bundle="$1"
+# 强制归位窗口（enter 时调用，防止抖动被中断后窗口偏移）
+restore_window() {
+  local saved; saved="$(read_file win_pos)"
+  [ -z "$saved" ] && return
+  local x y
+  x="${saved% *}"
+  y="${saved#* }"
+  /usr/bin/osascript -l JavaScript - "$x" "$y" <<'JS' 2>/dev/null
+function run(argv) {
+  var x = parseInt(argv[0]), y = parseInt(argv[1]);
+  var se = Application("System Events");
+  var fp = se.processes.whose({frontmost: true})[0];
+  var wins = fp.windows();
+  var fw = null;
+  for (var i = 0; i < wins.length; i++) {
+    if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
+  }
+  if (!fw && wins.length > 0) fw = wins[0];
+  if (fw) { fw.position = [x, y]; }
+}
+JS
+}
+
+# 向当前最前面的 App 发送 Enter（不切换 App）
+send_enter() {
+  local bundle
+  bundle="$(/usr/bin/osascript -e \
+    'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
+
   case "$bundle" in
     com.googlecode.iterm2)
       /usr/bin/osascript -e \
         'tell application "iTerm2" to tell current window to tell current session to write text ""' 2>/dev/null
       ;;
     *)
-      /usr/bin/osascript - "$bundle" <<'AS' 2>/dev/null
-on run argv
-  set targetBundle to item 1 of argv
-  tell application id targetBundle
-    activate
-    delay 0.2
-    tell application "System Events"
-      keystroke return
-    end tell
-  end tell
-  return "ok"
-end run
-AS
+      /usr/bin/osascript -e \
+        'tell application "System Events" to keystroke return' 2>/dev/null
       ;;
   esac
+  log "enter: sent to $bundle"
 }
 
 case "$1" in
   save)
-    # 1st press: just record the frontmost app, no timer
     kill_old_timer
     cleanup
+    log "save: started"
 
-    app="$(frontmost_bundle)"
-    write_file app_bundle "$app"
-    log "save: app=$app"
-
-    # Watchdog: auto-reset if tap not called within 180s
+    # 看门狗：长时间不 tap 就自动重置
     (
-      /bin/sleep 180
+      /bin/sleep "$SAVE_WATCHDOG"
       log "save: watchdog timeout, resetting"
       set_vars '{"dji_in_window": 0, "dji_active": 0}'
       cleanup
@@ -116,43 +147,39 @@ case "$1" in
     ;;
 
   tap)
-    # 2nd press (end dictation): start time window
     kill_old_timer
-
     set_vars '{"dji_in_window": 0}'
 
-    log "tap: window will open in ${TAP_WINDOW_MIN}s"
+    baseline="$(get_char_count)"
+    log "tap: baseline=$baseline, polling"
 
     (
-      /bin/sleep "$TAP_WINDOW_MIN"
-      set_vars '{"dji_in_window": 1}'
-      /usr/bin/afplay /System/Library/Sounds/Tink.aiff &
-      shake_window
-      log "tap: window OPEN"
+      while true; do
+        /bin/sleep "$POLL_INTERVAL"
+        current="$(get_char_count)"
+        if [ "$current" != "$baseline" ] && [ "$current" != "-1" ]; then
+          log "tap: text changed ($baseline → $current)"
+          set_vars '{"dji_in_window": 1}'
+          /usr/bin/afplay /System/Library/Sounds/Tink.aiff &
+          shake_window
+          log "tap: window OPEN"
 
-      window_duration=$(( TAP_WINDOW_MAX - TAP_WINDOW_MIN ))
-      /bin/sleep "$window_duration"
-      log "tap: window CLOSED, resetting"
-      set_vars '{"dji_in_window": 0, "dji_active": 0}'
-      cleanup
+          /bin/sleep "$SEND_WINDOW"
+          log "tap: window CLOSED, resetting"
+          set_vars '{"dji_in_window": 0, "dji_active": 0}'
+          cleanup
+          exit 0
+        fi
+      done
     ) &
 
     write_file timer.pid "$!"
     ;;
 
   enter)
-    # In window: send Enter to saved app
     kill_old_timer
-
-    app="$(read_file app_bundle)"
-    if [ -z "$app" ]; then
-      log "enter: no app_bundle, nothing to do"
-      cleanup
-      exit 0
-    fi
-
-    result="$(send_enter_to_app "$app")"
-    log "enter: send_enter to $app, result=$result"
+    restore_window
+    send_enter
     cleanup
     ;;
 
