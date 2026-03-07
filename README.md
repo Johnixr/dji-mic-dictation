@@ -13,7 +13,7 @@ Seriously, don't read through all these config files and try to set them up by h
 **Copy this command and paste it to your AI coding assistant:**
 
 ```
-帮我配置 DJI Mic Mini 语音听写，项目在 https://github.com/Johnixr/dji-mic-dictation
+Set up DJI Mic Mini dictation for me, project at https://github.com/Johnixr/dji-mic-dictation
 ```
 
 It will handle everything: install Karabiner, copy scripts, merge configs, grant permissions. That's the whole point.
