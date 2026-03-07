@@ -1,0 +1,95 @@
+{
+    "profiles": [
+        {
+            "complex_modifications": {
+                "rules": [
+                    {
+                        "description": "DJI MIC MINI: tap = Fn (dictation), double tap (3-6s) = Enter",
+                        "manipulators": [
+                            {
+                                "type": "basic",
+                                "conditions": [
+                                    {
+                                        "type": "device_if",
+                                        "identifiers": [{ "vendor_id": 11427, "product_id": 16401 }]
+                                    },
+                                    {
+                                        "type": "variable_if",
+                                        "name": "dji_active",
+                                        "value": 0
+                                    }
+                                ],
+                                "from": { "consumer_key_code": "volume_increment" },
+                                "to": [
+                                    { "key_code": "fn" },
+                                    { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh save" },
+                                    { "set_variable": { "name": "dji_active", "value": 1 } }
+                                ]
+                            },
+                            {
+                                "type": "basic",
+                                "conditions": [
+                                    {
+                                        "type": "device_if",
+                                        "identifiers": [{ "vendor_id": 11427, "product_id": 16401 }]
+                                    },
+                                    {
+                                        "type": "variable_if",
+                                        "name": "dji_active",
+                                        "value": 1
+                                    },
+                                    {
+                                        "type": "variable_if",
+                                        "name": "dji_in_window",
+                                        "value": 0
+                                    }
+                                ],
+                                "from": { "consumer_key_code": "volume_increment" },
+                                "to": [
+                                    { "key_code": "fn" },
+                                    { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh tap" }
+                                ]
+                            },
+                            {
+                                "type": "basic",
+                                "conditions": [
+                                    {
+                                        "type": "device_if",
+                                        "identifiers": [{ "vendor_id": 11427, "product_id": 16401 }]
+                                    },
+                                    {
+                                        "type": "variable_if",
+                                        "name": "dji_active",
+                                        "value": 1
+                                    },
+                                    {
+                                        "type": "variable_if",
+                                        "name": "dji_in_window",
+                                        "value": 1
+                                    }
+                                ],
+                                "from": { "consumer_key_code": "volume_increment" },
+                                "to": [
+                                    { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh enter" },
+                                    { "set_variable": { "name": "dji_active", "value": 0 } },
+                                    { "set_variable": { "name": "dji_in_window", "value": 0 } }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "devices": [
+                {
+                    "identifiers": {
+                        "is_consumer": true,
+                        "product_id": 16401,
+                        "vendor_id": 11427
+                    },
+                    "ignore": false,
+                    "manipulate_caps_lock_led": false
+                }
+            ]
+        }
+    ]
+}
