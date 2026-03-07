@@ -5,106 +5,337 @@
       "description": "Fn dictation toggle + confirm/preconfirm to send Enter",
       "manipulators": [
         {
-          "type": "basic",
-          "from": { "key_code": "fn", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh confirm 2>/dev/null" },
-            { "set_variable": { "name": "dji_ready_to_send", "value": 0 } }
-          ],
           "conditions": [
-            { "type": "variable_if", "name": "dji_ready_to_send", "value": 1 }
-          ]
+            {
+              "name": "dji_ready_to_send",
+              "type": "variable_if",
+              "value": 1
+            }
+          ],
+          "from": {
+            "key_code": "fn",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route fn-confirm confirm 2>/dev/null"
+            },
+            {
+              "set_variable": {
+                "name": "dji_ready_to_send",
+                "value": 0
+              }
+            }
+          ],
+          "type": "basic"
         },
         {
-          "type": "basic",
-          "from": { "key_code": "fn", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "key_code": "fn" },
-            { "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh watch 2>/dev/null &" },
-            { "set_variable": { "name": "dji_dictation_active", "value": 0 } },
-            { "set_variable": { "name": "dji_watching", "value": 1 } }
-          ],
           "conditions": [
-            { "type": "variable_if", "name": "dji_dictation_active", "value": 1 }
-          ]
+            {
+              "name": "dji_watching",
+              "type": "variable_if",
+              "value": 1
+            }
+          ],
+          "from": {
+            "key_code": "fn",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route fn-preconfirm preconfirm 2>/dev/null"
+            }
+          ],
+          "type": "basic"
         },
         {
-          "type": "basic",
-          "from": { "key_code": "fn", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh preconfirm 2>/dev/null" }
-          ],
           "conditions": [
-            { "type": "variable_if", "name": "dji_watching", "value": 1 }
-          ]
+            {
+              "name": "dji_dictation_active",
+              "type": "variable_if",
+              "value": 1
+            },
+            {
+              "name": "dji_watching",
+              "type": "variable_unless",
+              "value": 1
+            },
+            {
+              "name": "dji_ready_to_send",
+              "type": "variable_unless",
+              "value": 1
+            }
+          ],
+          "from": {
+            "key_code": "fn",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "set_variable": {
+                "name": "dji_dictation_active",
+                "value": 0
+              }
+            },
+            {
+              "set_variable": {
+                "name": "dji_watching",
+                "value": 1
+              }
+            },
+            {
+              "key_code": "fn"
+            },
+            {
+              "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &"
+            }
+          ],
+          "type": "basic"
         },
         {
-          "type": "basic",
-          "from": { "key_code": "fn", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh save 2>/dev/null" },
-            { "key_code": "fn" },
-            { "set_variable": { "name": "dji_dictation_active", "value": 1 } }
-          ],
           "conditions": [
-            { "type": "variable_unless", "name": "dji_dictation_active", "value": 1 },
-            { "type": "variable_unless", "name": "dji_ready_to_send", "value": 1 },
-            { "type": "variable_unless", "name": "dji_watching", "value": 1 }
-          ]
+            {
+              "name": "dji_dictation_active",
+              "type": "variable_unless",
+              "value": 1
+            },
+            {
+              "name": "dji_ready_to_send",
+              "type": "variable_unless",
+              "value": 1
+            },
+            {
+              "name": "dji_watching",
+              "type": "variable_unless",
+              "value": 1
+            }
+          ],
+          "from": {
+            "key_code": "fn",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route fn-save save 2>/dev/null"
+            },
+            {
+              "key_code": "fn"
+            },
+            {
+              "set_variable": {
+                "name": "dji_dictation_active",
+                "value": 1
+              }
+            }
+          ],
+          "type": "basic"
         },
         {
-          "type": "basic",
-          "from": { "consumer_key_code": "volume_increment", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh confirm 2>/dev/null" },
-            { "set_variable": { "name": "dji_ready_to_send", "value": 0 } }
-          ],
           "conditions": [
-            { "type": "device_if", "identifiers": [{ "vendor_id": 11427, "product_id": 16401 }] },
-            { "type": "variable_if", "name": "dji_ready_to_send", "value": 1 }
-          ]
+            {
+              "identifiers": [
+                {
+                  "product_id": 16401,
+                  "vendor_id": 11427
+                }
+              ],
+              "type": "device_if"
+            },
+            {
+              "name": "dji_ready_to_send",
+              "type": "variable_if",
+              "value": 1
+            }
+          ],
+          "from": {
+            "consumer_key_code": "volume_increment",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-confirm confirm 2>/dev/null"
+            },
+            {
+              "set_variable": {
+                "name": "dji_ready_to_send",
+                "value": 0
+              }
+            }
+          ],
+          "type": "basic"
         },
         {
-          "type": "basic",
-          "from": { "consumer_key_code": "volume_increment", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "key_code": "fn" },
-            { "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh watch 2>/dev/null &" },
-            { "set_variable": { "name": "dji_dictation_active", "value": 0 } },
-            { "set_variable": { "name": "dji_watching", "value": 1 } }
-          ],
           "conditions": [
-            { "type": "device_if", "identifiers": [{ "vendor_id": 11427, "product_id": 16401 }] },
-            { "type": "variable_if", "name": "dji_dictation_active", "value": 1 }
-          ]
+            {
+              "identifiers": [
+                {
+                  "product_id": 16401,
+                  "vendor_id": 11427
+                }
+              ],
+              "type": "device_if"
+            },
+            {
+              "name": "dji_watching",
+              "type": "variable_if",
+              "value": 1
+            }
+          ],
+          "from": {
+            "consumer_key_code": "volume_increment",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-preconfirm preconfirm 2>/dev/null"
+            }
+          ],
+          "type": "basic"
         },
         {
-          "type": "basic",
-          "from": { "consumer_key_code": "volume_increment", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh preconfirm 2>/dev/null" }
-          ],
           "conditions": [
-            { "type": "device_if", "identifiers": [{ "vendor_id": 11427, "product_id": 16401 }] },
-            { "type": "variable_if", "name": "dji_watching", "value": 1 }
-          ]
+            {
+              "identifiers": [
+                {
+                  "product_id": 16401,
+                  "vendor_id": 11427
+                }
+              ],
+              "type": "device_if"
+            },
+            {
+              "name": "dji_dictation_active",
+              "type": "variable_if",
+              "value": 1
+            },
+            {
+              "name": "dji_watching",
+              "type": "variable_unless",
+              "value": 1
+            },
+            {
+              "name": "dji_ready_to_send",
+              "type": "variable_unless",
+              "value": 1
+            }
+          ],
+          "from": {
+            "consumer_key_code": "volume_increment",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "set_variable": {
+                "name": "dji_dictation_active",
+                "value": 0
+              }
+            },
+            {
+              "set_variable": {
+                "name": "dji_watching",
+                "value": 1
+              }
+            },
+            {
+              "key_code": "fn"
+            },
+            {
+              "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &"
+            }
+          ],
+          "type": "basic"
         },
         {
-          "type": "basic",
-          "from": { "consumer_key_code": "volume_increment", "modifiers": { "optional": ["any"] } },
-          "to": [
-            { "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh save 2>/dev/null" },
-            { "key_code": "fn" },
-            { "set_variable": { "name": "dji_dictation_active", "value": 1 } }
-          ],
           "conditions": [
-            { "type": "device_if", "identifiers": [{ "vendor_id": 11427, "product_id": 16401 }] },
-            { "type": "variable_unless", "name": "dji_dictation_active", "value": 1 },
-            { "type": "variable_unless", "name": "dji_ready_to_send", "value": 1 },
-            { "type": "variable_unless", "name": "dji_watching", "value": 1 }
-          ]
+            {
+              "identifiers": [
+                {
+                  "product_id": 16401,
+                  "vendor_id": 11427
+                }
+              ],
+              "type": "device_if"
+            },
+            {
+              "name": "dji_dictation_active",
+              "type": "variable_unless",
+              "value": 1
+            },
+            {
+              "name": "dji_ready_to_send",
+              "type": "variable_unless",
+              "value": 1
+            },
+            {
+              "name": "dji_watching",
+              "type": "variable_unless",
+              "value": 1
+            }
+          ],
+          "from": {
+            "consumer_key_code": "volume_increment",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-save save 2>/dev/null"
+            },
+            {
+              "key_code": "fn"
+            },
+            {
+              "set_variable": {
+                "name": "dji_dictation_active",
+                "value": 1
+              }
+            }
+          ],
+          "type": "basic"
         }
       ]
+    }
+  ],
+  "devices": [
+    {
+      "identifiers": {
+        "is_consumer": true,
+        "product_id": 16401,
+        "vendor_id": 11427
+      },
+      "ignore": false,
+      "manipulate_caps_lock_led": false
     }
   ]
 }
