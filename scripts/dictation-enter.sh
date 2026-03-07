@@ -98,9 +98,21 @@ AS
 case "$1" in
   save)
     # 1st press: just record the frontmost app, no timer
+    kill_old_timer
+    cleanup
+
     app="$(frontmost_bundle)"
     write_file app_bundle "$app"
     log "save: app=$app"
+
+    # Watchdog: auto-reset if tap not called within 180s
+    (
+      /bin/sleep 180
+      log "save: watchdog timeout, resetting"
+      set_vars '{"dji_in_window": 0, "dji_active": 0}'
+      cleanup
+    ) &
+    write_file timer.pid "$!"
     ;;
 
   tap)
