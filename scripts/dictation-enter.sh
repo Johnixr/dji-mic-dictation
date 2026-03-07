@@ -1,24 +1,29 @@
 #!/bin/bash
-# DJI MIC MINI dictation helper
+# DJI MIC MINI dictation helper — tmux + GUI dual mode
 #
 # Usage (called by Karabiner):
-#   dictation-enter.sh save   — 1st press: mark dictation started
-#   dictation-enter.sh tap    — 2nd press: end dictation, wait for text, open send window
-#   dictation-enter.sh enter  — in window: send Enter to current frontmost app
+#   dictation-enter.sh save       — 1st press: detect mode (tmux or gui)
+#   dictation-enter.sh watch      — 2nd press: poll for content change
+#   dictation-enter.sh preconfirm — press during transcription: queue send on arrival
+#   dictation-enter.sh confirm    — press after content settled: send Enter now
 #
-# Karabiner rules:
-#   dji_active=0            + press → Fn + save + dji_active=1
-#   dji_active=1, window=0  + press → Fn + tap  (ends dictation, polls for text)
-#   dji_active=1, window=1  + press → enter + reset (no Fn!)
+# tmux mode: poll capture-pane, send via send-keys
+# gui mode:  poll Typeless DB, send via osascript keystroke return
+#
+# Modes:
+#   - tmux:  frontmost app is a terminal with tmux → capture-pane polling
+#   - gui:   any other app (WeChat, Slack, etc.) → Typeless DB polling
+#
+# iTerm2 special handling:
+#   - tmux -CC integration windows (name starts with "↣") → tmux mode
+#   - plain iTerm2 tabs → gui mode
 
 STATE_DIR="/tmp/dji-dictation"
 LOG="$STATE_DIR/debug.log"
-POLL_INTERVAL=0.2   # seconds between char count checks
-SEND_WINDOW=3       # seconds the send window stays open
-SAVE_WATCHDOG=180   # seconds before save auto-resets
-
-KARABINER_CLI="/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli"
-PYTHON3="/opt/homebrew/Caskroom/miniforge/base/bin/python3"
+TMUX_BIN="${TMUX_BIN:-/opt/homebrew/bin/tmux}"
+KCLI="/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli"
+TYPELESS_DB="$HOME/Library/Application Support/Typeless/typeless.db"
+CONFIRM_WINDOW=2
 
 /bin/mkdir -p "$STATE_DIR"
 
@@ -27,164 +32,190 @@ log() { /usr/bin/printf '%s %s\n' "$(/bin/date +%H:%M:%S)" "$*" >> "$LOG"; }
 read_file()  { /bin/cat "$STATE_DIR/$1" 2>/dev/null; }
 write_file() { /usr/bin/printf '%s' "$2" > "$STATE_DIR/$1"; }
 
-kill_old_timer() {
-  local pid; pid="$(read_file timer.pid)"
-  if [ -n "$pid" ]; then
-    # kill 整个进程组（包括 osascript 子进程）
-    /bin/kill -- -"$pid" 2>/dev/null
-    /bin/kill "$pid" 2>/dev/null
-  fi
-  /bin/rm -f "$STATE_DIR/timer.pid"
+kill_old_watcher() {
+  local pid; pid="$(read_file watcher.pid)"
+  [ -n "$pid" ] && /bin/kill "$pid" 2>/dev/null
+  /bin/rm -f "$STATE_DIR/watcher.pid"
 }
 
-cleanup() { /bin/rm -f "$STATE_DIR"/{timer.pid,win_pos}; }
+cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts}; }
 
-set_vars() {
-  "$KARABINER_CLI" --set-variables "$1" 2>/dev/null
-}
+set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
-# 获取当前焦点输入框的字符数
-get_char_count() {
-  "$PYTHON3" -c "
-import ApplicationServices as AX
-from Cocoa import NSWorkspace
-app = NSWorkspace.sharedWorkspace().frontmostApplication()
-ref = AX.AXUIElementCreateApplication(app.processIdentifier())
-_, el = AX.AXUIElementCopyAttributeValue(ref, 'AXFocusedUIElement', None)
-if el:
-    _, n = AX.AXUIElementCopyAttributeValue(el, 'AXNumberOfCharacters', None)
-    print(n if n else -1)
-else:
-    print(-1)
-" 2>/dev/null
+active_tmux_pane() {
+  $TMUX_BIN list-panes -a \
+    -F '#{session_attached} #{window_active} #{pane_active} #{pane_id}' 2>/dev/null \
+    | awk '$1==1 && $2==1 && $3==1 {print $4; exit}'
 }
 
-# 保存当前窗口位置并震动（跳过非标准窗口如水印层）
-shake_window() {
-  /usr/bin/osascript -l JavaScript <<JS 2>/dev/null
-var se = Application("System Events");
-var fp = se.processes.whose({frontmost: true})[0];
-var wins = fp.windows();
-var fw = null;
-for (var i = 0; i < wins.length; i++) {
-  if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
-}
-if (!fw && wins.length > 0) fw = wins[0];
-if (!fw) { "no window"; } else {
-  var pos = fw.position();
-  var x = pos[0], y = pos[1];
-  // 保存原始位置到文件，供 enter 快速归位
-  var app = Application.currentApplication();
-  app.includeStandardAdditions = true;
-  app.doShellScript("printf '%s %s' " + x + " " + y + " > ${STATE_DIR}/win_pos");
-  for (var r = 0; r < 6; r++) {
-    fw.position = [x + 4, y]; delay(0.01);
-    fw.position = [x - 4, y]; delay(0.01);
-  }
-  delay(0.05); fw.position = [x, y];
-  delay(0.05); fw.position = [x, y];
-  "ok";
-}
-JS
+typeless_check_done() {
+  local save_ts="$1"
+  sqlite3 "$TYPELESS_DB" \
+    "SELECT status FROM history WHERE updated_at > '$save_ts' AND status IN ('transcript','dismissed') LIMIT 1;" 2>/dev/null
 }
 
-# 强制归位窗口（enter 时调用，防止抖动被中断后窗口偏移）
-restore_window() {
-  local saved; saved="$(read_file win_pos)"
-  [ -z "$saved" ] && return
-  local x y
-  x="${saved% *}"
-  y="${saved#* }"
-  /usr/bin/osascript -l JavaScript - "$x" "$y" <<'JS' 2>/dev/null
-function run(argv) {
-  var x = parseInt(argv[0]), y = parseInt(argv[1]);
-  var se = Application("System Events");
-  var fp = se.processes.whose({frontmost: true})[0];
-  var wins = fp.windows();
-  var fw = null;
-  for (var i = 0; i < wins.length; i++) {
-    if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
-  }
-  if (!fw && wins.length > 0) fw = wins[0];
-  if (fw) { fw.position = [x, y]; }
-}
-JS
-}
-
-# 向当前最前面的 App 发送 Enter（不切换 App）
-send_enter() {
+gui_send_enter() {
   local bundle
   bundle="$(/usr/bin/osascript -e \
     'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
-
   case "$bundle" in
     com.googlecode.iterm2)
       /usr/bin/osascript -e \
-        'tell application "iTerm2" to tell current window to tell current session to write text ""' 2>/dev/null
+        'tell app "iTerm" to tell current window to tell current session to write text ""' 2>/dev/null
       ;;
     *)
       /usr/bin/osascript -e \
         'tell application "System Events" to keystroke return' 2>/dev/null
       ;;
   esac
-  log "enter: sent to $bundle"
+  log "gui_send_enter: $bundle"
 }
 
 case "$1" in
   save)
-    kill_old_timer
+    kill_old_watcher
+    set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
     cleanup
-    log "save: started"
 
-    # 看门狗：长时间不 tap 就自动重置
-    (
-      /bin/sleep "$SAVE_WATCHDOG"
-      log "save: watchdog timeout, resetting"
-      set_vars '{"dji_in_window": 0, "dji_active": 0}'
-      cleanup
-    ) &
-    write_file timer.pid "$!"
+    front_bundle="$(/usr/bin/osascript -e \
+      'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
+
+    pane=""
+    case "$front_bundle" in
+      com.googlecode.iterm2)
+        iterm_win="$(/usr/bin/osascript -e 'tell app "iTerm" to name of current window' 2>/dev/null)"
+        case "$iterm_win" in
+          "↣"*) pane="$(active_tmux_pane)" ;;
+        esac
+        ;;
+      net.kovidgoyal.kitty|io.alacritty|com.apple.Terminal)
+        pane="$(active_tmux_pane)"
+        ;;
+    esac
+
+    if [ -n "$pane" ]; then
+      write_file mode tmux
+      write_file pane_id "$pane"
+      log "save mode=tmux pane=${pane} app=${front_bundle}"
+    else
+      write_file mode gui
+      save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+      write_file save_ts "$save_ts"
+      log "save mode=gui app=${front_bundle} save_ts=${save_ts}"
+    fi
     ;;
 
-  tap)
-    kill_old_timer
-    set_vars '{"dji_in_window": 0}'
+  watch)
+    kill_old_watcher
+    set_vars '{"dji_ready_to_send":0}'
+    trap 'set_vars "{\"dji_watching\":0}"' EXIT
 
-    baseline="$(get_char_count)"
-    log "tap: baseline=$baseline, polling"
+    mode="$(read_file mode)"
+    write_file watcher.pid "$$"
 
-    (
-      while true; do
-        /bin/sleep "$POLL_INTERVAL"
-        current="$(get_char_count)"
-        if [ "$current" != "$baseline" ] && [ "$current" != "-1" ]; then
-          log "tap: text changed ($baseline → $current)"
-          set_vars '{"dji_in_window": 1}'
-          /usr/bin/afplay /System/Library/Sounds/Tink.aiff &
-          shake_window
-          log "tap: window OPEN"
+    if [ "$mode" = "tmux" ]; then
+      pane="$(read_file pane_id)"
+      [ -n "$pane" ] || { cleanup; exit 0; }
 
-          /bin/sleep "$SEND_WINDOW"
-          log "tap: window CLOSED, resetting"
-          set_vars '{"dji_in_window": 0, "dji_active": 0}'
-          cleanup
-          exit 0
+      prev="$($TMUX_BIN capture-pane -t "$pane" -p 2>/dev/null)"
+      log "watch mode=tmux pane=${pane} polling"
+
+      changed=0 i=0
+      while [ $i -lt 300 ]; do
+        /bin/sleep 0.1
+        i=$((i + 1))
+        curr="$($TMUX_BIN capture-pane -t "$pane" -p 2>/dev/null)"
+        if [ "$curr" != "$prev" ]; then
+          changed=1 && break
         fi
       done
-    ) &
 
-    write_file timer.pid "$!"
+      set_vars '{"dji_watching":0}'
+
+      if [ $changed -eq 1 ]; then
+        if [ -f "$STATE_DIR/pending_confirm" ]; then
+          $TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
+          log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s)"
+          cleanup
+        else
+          set_vars '{"dji_ready_to_send":1}'
+          log "watch tmux content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
+          /bin/sleep "$CONFIRM_WINDOW"
+          set_vars '{"dji_ready_to_send":0}'
+          log "watch tmux window_expired"
+          /bin/rm -f "$STATE_DIR/watcher.pid"
+        fi
+      else
+        log "watch tmux no_change (timeout 30s)"
+        /bin/rm -f "$STATE_DIR/watcher.pid"
+      fi
+
+    elif [ "$mode" = "gui" ]; then
+      save_ts="$(read_file save_ts)"
+      log "watch mode=gui save_ts=${save_ts} polling"
+
+      changed=0 i=0
+      while [ $i -lt 300 ]; do
+        /bin/sleep 0.1
+        i=$((i + 1))
+        done_status="$(typeless_check_done "$save_ts")"
+        if [ -n "$done_status" ]; then
+          changed=1 && break
+        fi
+      done
+
+      set_vars '{"dji_watching":0}'
+
+      if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+        if [ -f "$STATE_DIR/pending_confirm" ]; then
+          gui_send_enter
+          log "watch gui preconfirm_send (${i} polls ~$((i / 10))s)"
+          cleanup
+        else
+          set_vars '{"dji_ready_to_send":1}'
+          log "watch gui content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
+          /bin/sleep "$CONFIRM_WINDOW"
+          set_vars '{"dji_ready_to_send":0}'
+          log "watch gui window_expired"
+          /bin/rm -f "$STATE_DIR/watcher.pid"
+        fi
+      elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
+        log "watch gui dismissed (${i} polls ~$((i / 10))s)"
+        /bin/rm -f "$STATE_DIR/watcher.pid"
+      else
+        log "watch gui no_change (timeout 30s)"
+        /bin/rm -f "$STATE_DIR/watcher.pid"
+      fi
+    else
+      log "watch unknown mode, exit"
+      /bin/rm -f "$STATE_DIR/watcher.pid"
+    fi
     ;;
 
-  enter)
-    kill_old_timer
-    restore_window
-    send_enter
+  preconfirm)
+    write_file pending_confirm 1
+    log "preconfirm queued"
+    ;;
+
+  confirm)
+    kill_old_watcher
+    set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
+
+    mode="$(read_file mode)"
+    if [ "$mode" = "tmux" ]; then
+      pane="$(read_file pane_id)"
+      if [ -n "$pane" ]; then
+        $TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
+        log "confirm tmux send_enter pane=${pane}"
+      else
+        log "confirm tmux no_pane"
+      fi
+    elif [ "$mode" = "gui" ]; then
+      gui_send_enter
+      log "confirm gui send_enter"
+    else
+      log "confirm unknown mode"
+    fi
     cleanup
-    ;;
-
-  *)
-    echo "Usage: $0 {save|tap|enter}" >&2
-    exit 1
     ;;
 esac
