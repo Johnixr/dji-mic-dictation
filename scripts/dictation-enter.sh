@@ -14,7 +14,7 @@
 STATE_DIR="/tmp/dji-dictation"
 LOG="$STATE_DIR/debug.log"
 POLL_INTERVAL=0.2   # seconds between char count checks
-SEND_WINDOW=6       # seconds the send window stays open
+SEND_WINDOW=3       # seconds the send window stays open
 SAVE_WATCHDOG=180   # seconds before save auto-resets
 
 KARABINER_CLI="/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli"
