@@ -57,11 +57,13 @@ tell application "System Events"
   set {x, y} to position of fw
   repeat 6 times
     set position of fw to {x + 4, y}
-    delay 0.02
+    delay 0.01
     set position of fw to {x - 4, y}
-    delay 0.02
+    delay 0.01
   end repeat
-  delay 0.03
+  delay 0.05
+  set position of fw to {x, y}
+  delay 0.05
   set position of fw to {x, y}
 end tell
 AS
