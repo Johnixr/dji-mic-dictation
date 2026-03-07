@@ -4,13 +4,13 @@ You are setting up a DJI Mic Mini wireless microphone as a hands-free dictation 
 
 ## What this does
 
-Maps the DJI Mic Mini's volume+ button to macOS dictation (Fn key), with a time-window based auto-Enter feature:
+Maps the DJI Mic Mini's volume+ button to macOS dictation (Fn key), with adaptive text-detection based auto-Enter:
 
-1. **1st press**: Start dictation (Fn) + record frontmost app
-2. **2nd press**: Stop dictation (Fn) + start 3-second timer
-3. **3 seconds later**: Audio chime + window shake = send window is open
-4. **3rd press (within 3-6s)**: Send Enter to the recorded app
-5. **Timeout (>6s)**: Silent reset, no side effects
+1. **1st press**: Start dictation (Fn)
+2. **2nd press**: Stop dictation (Fn) + poll for text input via Accessibility API
+3. **Text detected**: Audio chime + window shake = send window is open
+4. **3rd press (within 3s)**: Send Enter to current frontmost app
+5. **No press within 3s**: Silent reset, no side effects
 
 ## Installation steps (execute in order)
 
@@ -22,7 +22,23 @@ brew install --cask karabiner-elements
 
 If not installed, prompt the user to open Karabiner-Elements and grant **Input Monitoring** and **Accessibility** permissions in System Settings → Privacy & Security.
 
-### 2. Copy the script
+### 2. Install pyobjc (required for text detection)
+
+The script uses Python + pyobjc to detect text input via macOS Accessibility API. Install it with:
+
+```bash
+pip install pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices
+```
+
+Then find the full path of the python3 that has pyobjc:
+
+```bash
+python3 -c "import ApplicationServices; import sys; print(sys.executable)"
+```
+
+Update the `PYTHON3=` line in `dictation-enter.sh` with this path.
+
+### 3. Copy the script
 
 ```bash
 mkdir -p ~/.config/karabiner/scripts
@@ -30,7 +46,7 @@ cp scripts/dictation-enter.sh ~/.config/karabiner/scripts/
 chmod +x ~/.config/karabiner/scripts/dictation-enter.sh
 ```
 
-### 3. Merge Karabiner config
+### 4. Merge Karabiner config
 
 Read `karabiner/dji-mic-mini.json` from this repo. Merge its contents into the user's existing `~/.config/karabiner/karabiner.json`:
 
@@ -39,7 +55,7 @@ Read `karabiner/dji-mic-mini.json` from this repo. Merge its contents into the u
 - **Do NOT overwrite** the user's existing rules or devices — append to them
 - The active profile is the one with `"selected": true`, or the first profile if none is selected
 
-### 4. Verify device connection
+### 5. Verify device connection
 
 ```bash
 '/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli' --list-connected-devices
@@ -47,7 +63,7 @@ Read `karabiner/dji-mic-mini.json` from this repo. Merge its contents into the u
 
 Look for a device with vendor_id 11427 and product_id 16401. If found, the DJI Mic Mini receiver is connected.
 
-### 5. Remind user
+### 6. Remind user
 
 Tell the user to:
 - Enable macOS Dictation: System Settings → Keyboard → Dictation → On
@@ -63,8 +79,10 @@ Tell the user to:
 
 ## Configurable parameters (in dictation-enter.sh)
 
-- `TAP_WINDOW_MIN=3` — seconds after 2nd press before send window opens
-- `TAP_WINDOW_MAX=6` — seconds after 2nd press when window closes and resets
+- `PYTHON3=...` — full path to python3 with pyobjc installed
+- `POLL_INTERVAL=0.2` — seconds between text input checks
+- `SEND_WINDOW=3` — seconds the send window stays open after text is detected
+- `SAVE_WATCHDOG=180` — seconds before auto-reset if 2nd press never happens
 
 ## Debugging
 

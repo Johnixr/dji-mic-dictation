@@ -45,14 +45,14 @@ Copy and paste the command above into your AI assistant. Done.
 
 ```
 Press 1 → Fn (start dictation) → speak freely, any duration
-Press 2 → Fn (stop dictation) → 3 second countdown starts
-         → "Tink" sound + window shake = send window is open
-Press 3 → Enter (send to app) → AI starts working
+Press 2 → Fn (stop dictation) → polls for text input
+         → text detected → "Tink" sound + window shake = send window is open
+Press 3 → Enter (send to current app) → AI starts working
 
-No press? → auto-reset after 6 seconds, no side effects
+No press? → auto-reset after 3 seconds, no side effects
 ```
 
-One physical button, three virtual actions, powered by a time-window state machine.
+One physical button, three virtual actions, powered by adaptive text detection.
 
 ## Prerequisites
 
@@ -71,6 +71,7 @@ dji-mic-dictation/
 ├── README.md                      # You're reading this
 ├── README_CN.md                   # 中文文档
 ├── CLAUDE.md                      # Instructions for AI assistants
+├── AGENTS.md                      # Symlink to CLAUDE.md (for Codex)
 ├── scripts/
 │   └── dictation-enter.sh         # Main script (save/tap/enter)
 └── karabiner/
