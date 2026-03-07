@@ -76,20 +76,20 @@ active_tmux_pane() {
 typeless_check_done() {
   local save_ts="$1"
   sqlite3 "$TYPELESS_DB" \
-    "SELECT status FROM history WHERE updated_at > '$save_ts' AND status IN ('transcript','dismissed') LIMIT 1;" 2>/dev/null
+    "SELECT status FROM history WHERE updated_at >= '$save_ts' AND status IN ('transcript','dismissed') LIMIT 1;" 2>/dev/null
 }
 
 typeless_has_record() {
   local save_ts="$1"
   sqlite3 "$TYPELESS_DB" \
-    "SELECT 1 FROM history WHERE created_at > '$save_ts' LIMIT 1;" 2>/dev/null
+    "SELECT 1 FROM history WHERE created_at >= '$save_ts' LIMIT 1;" 2>/dev/null
 }
 
 typeless_check_stale() {
   local save_ts="$1"
   local stale_seconds=5
   sqlite3 "$TYPELESS_DB" \
-    "SELECT 1 FROM history WHERE created_at > '$save_ts' AND status = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
+    "SELECT 1 FROM history WHERE created_at >= '$save_ts' AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
 }
 
 gui_send_enter() {
@@ -122,6 +122,9 @@ case "$1" in
     kill_old_watcher
     set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
     cleanup
+    save_ts="$(utc_timestamp_ms)"
+    [ -n "$save_ts" ] || save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+    write_file save_ts "$save_ts"
 
     front_bundle="$(/usr/bin/osascript -e \
       'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
@@ -142,13 +145,9 @@ case "$1" in
     if [ -n "$pane" ]; then
       write_file mode tmux
       write_file pane_id "$pane"
-      save_ts="$(utc_timestamp_ms)"
-      write_file save_ts "$save_ts"
       log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts}"
     else
       write_file mode gui
-      save_ts="$(utc_timestamp_ms)"
-      write_file save_ts "$save_ts"
       log "save mode=gui app=${front_bundle} save_ts=${save_ts}"
     fi
     ;;
