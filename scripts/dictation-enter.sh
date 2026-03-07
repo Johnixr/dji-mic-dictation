@@ -17,7 +17,8 @@ KCLI="/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli
 TYPELESS_DB="$HOME/Library/Application Support/Typeless/typeless.db"
 CONFIRM_WINDOW=2
 PRECONFIRM_GRACE_INTERVAL=0.02
-PRECONFIRM_GRACE_POLLS=20
+PRECONFIRM_GRACE_POLLS=50
+DELIVERY_DELAY=0.25
 PYTHON3_BIN="$(command -v python3 2>/dev/null)"
 
 /bin/mkdir -p "$STATE_DIR"
@@ -35,6 +36,10 @@ PY
   fi
 }
 
+utc_timestamp_ms() {
+  "$PYTHON3_BIN" -c "from datetime import datetime,timezone;t=datetime.now(timezone.utc);print(t.strftime('%Y-%m-%dT%H:%M:%S.')+f'{t.microsecond//1000:03d}Z')" 2>/dev/null
+}
+
 log() { /usr/bin/printf '%s %s\n' "$(timestamp)" "$*" >> "$LOG"; }
 
 read_file()  { /bin/cat "$STATE_DIR/$1" 2>/dev/null; }
@@ -46,7 +51,7 @@ kill_old_watcher() {
   /bin/rm -f "$STATE_DIR/watcher.pid"
 }
 
-cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,pane_baseline}; }
+cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts}; }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
@@ -72,6 +77,19 @@ typeless_check_done() {
   local save_ts="$1"
   sqlite3 "$TYPELESS_DB" \
     "SELECT status FROM history WHERE updated_at > '$save_ts' AND status IN ('transcript','dismissed') LIMIT 1;" 2>/dev/null
+}
+
+typeless_has_record() {
+  local save_ts="$1"
+  sqlite3 "$TYPELESS_DB" \
+    "SELECT 1 FROM history WHERE created_at > '$save_ts' LIMIT 1;" 2>/dev/null
+}
+
+typeless_check_stale() {
+  local save_ts="$1"
+  local stale_seconds=5
+  sqlite3 "$TYPELESS_DB" \
+    "SELECT 1 FROM history WHERE created_at > '$save_ts' AND status = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
 }
 
 gui_send_enter() {
@@ -124,11 +142,12 @@ case "$1" in
     if [ -n "$pane" ]; then
       write_file mode tmux
       write_file pane_id "$pane"
-      $TMUX_BIN capture-pane -t "$pane" -p 2>/dev/null > "$STATE_DIR/pane_baseline"
-      log "save mode=tmux pane=${pane} app=${front_bundle}"
+      save_ts="$(utc_timestamp_ms)"
+      write_file save_ts "$save_ts"
+      log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts}"
     else
       write_file mode gui
-      save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+      save_ts="$(utc_timestamp_ms)"
       write_file save_ts "$save_ts"
       log "save mode=gui app=${front_bundle} save_ts=${save_ts}"
     fi
@@ -145,26 +164,43 @@ case "$1" in
     if [ "$mode" = "tmux" ]; then
       pane="$(read_file pane_id)"
       [ -n "$pane" ] || { cleanup; exit 0; }
+      save_ts="$(read_file save_ts)"
+      log "watch mode=tmux pane=${pane} save_ts=${save_ts} polling"
 
-      prev="$(/bin/cat "$STATE_DIR/pane_baseline" 2>/dev/null)"
-      log "watch mode=tmux pane=${pane} polling"
-
-      changed=0 i=0
+      changed=0 i=0 done_status="" has_record=0
       while [ $i -lt 300 ]; do
         /bin/sleep 0.1
         i=$((i + 1))
-        curr="$($TMUX_BIN capture-pane -t "$pane" -p 2>/dev/null)"
-        if [ "$curr" != "$prev" ]; then
+        done_status="$(typeless_check_done "$save_ts")"
+        if [ -n "$done_status" ]; then
           changed=1 && break
+        fi
+        if [ $has_record -eq 0 ] && [ $i -eq 100 ]; then
+          if [ -z "$(typeless_has_record "$save_ts")" ]; then
+            log "watch tmux no_record_after_10s, abort"
+            clear_watch_state
+            /bin/rm -f "$STATE_DIR/watcher.pid"
+            exit 0
+          fi
+          has_record=1
+        fi
+        if [ $has_record -eq 1 ] && [ $((i % 50)) -eq 0 ]; then
+          if [ -n "$(typeless_check_stale "$save_ts")" ]; then
+            log "watch tmux stale_record (${i} polls ~$((i / 10))s), abort"
+            clear_watch_state
+            /bin/rm -f "$STATE_DIR/watcher.pid"
+            exit 0
+          fi
         fi
       done
 
-      if [ $changed -eq 1 ]; then
-        log "watch tmux changed_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
+      if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+        log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
         if wait_for_pending_confirm; then
+          /bin/sleep "$DELIVERY_DELAY"
           clear_watch_state
           $TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
-          log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls})"
+          log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
           cleanup
         else
           set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
@@ -174,6 +210,10 @@ case "$1" in
           log "watch tmux window_expired"
           /bin/rm -f "$STATE_DIR/watcher.pid"
         fi
+      elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
+        clear_watch_state
+        log "watch tmux dismissed (${i} polls ~$((i / 10))s)"
+        /bin/rm -f "$STATE_DIR/watcher.pid"
       else
         clear_watch_state
         log "watch tmux no_change (timeout 30s)"
@@ -184,7 +224,7 @@ case "$1" in
       save_ts="$(read_file save_ts)"
       log "watch mode=gui save_ts=${save_ts} polling"
 
-      changed=0 i=0
+      changed=0 i=0 has_record=0
       while [ $i -lt 300 ]; do
         /bin/sleep 0.1
         i=$((i + 1))
@@ -192,14 +232,32 @@ case "$1" in
         if [ -n "$done_status" ]; then
           changed=1 && break
         fi
+        if [ $has_record -eq 0 ] && [ $i -eq 100 ]; then
+          if [ -z "$(typeless_has_record "$save_ts")" ]; then
+            log "watch gui no_record_after_10s, abort"
+            clear_watch_state
+            /bin/rm -f "$STATE_DIR/watcher.pid"
+            exit 0
+          fi
+          has_record=1
+        fi
+        if [ $has_record -eq 1 ] && [ $((i % 50)) -eq 0 ]; then
+          if [ -n "$(typeless_check_stale "$save_ts")" ]; then
+            log "watch gui stale_record (${i} polls ~$((i / 10))s), abort"
+            clear_watch_state
+            /bin/rm -f "$STATE_DIR/watcher.pid"
+            exit 0
+          fi
+        fi
       done
 
       if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
         log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
         if wait_for_pending_confirm; then
+          /bin/sleep "$DELIVERY_DELAY"
           clear_watch_state
           gui_send_enter
-          log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls})"
+          log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
           cleanup
         else
           set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
@@ -226,10 +284,12 @@ case "$1" in
 
   preconfirm)
     write_file pending_confirm 1
+    /usr/bin/afplay /System/Library/Sounds/Sosumi.aiff &
     log "preconfirm queued"
     ;;
 
   confirm)
+    /usr/bin/afplay /System/Library/Sounds/Sosumi.aiff &
     kill_old_watcher
     set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 
