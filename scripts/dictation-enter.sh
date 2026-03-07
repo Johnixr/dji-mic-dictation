@@ -51,7 +51,7 @@ kill_old_watcher() {
   /bin/rm -f "$STATE_DIR/watcher.pid"
 }
 
-cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts}; }
+cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at}; }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
@@ -73,23 +73,36 @@ active_tmux_pane() {
     | awk '$1==1 && $2==1 && $3==1 {print $4; exit}'
 }
 
-typeless_check_done() {
-  local save_ts="$1"
+typeless_last_rowid() {
+  sqlite3 "$TYPELESS_DB" "SELECT COALESCE(MAX(rowid), 0) FROM history;" 2>/dev/null
+}
+
+typeless_row_updated_at() {
+  local rowid="$1"
   sqlite3 "$TYPELESS_DB" \
-    "SELECT status FROM history WHERE updated_at >= '$save_ts' AND status IN ('transcript','dismissed') LIMIT 1;" 2>/dev/null
+    "SELECT COALESCE(updated_at, '') FROM history WHERE rowid = ${rowid:-0} LIMIT 1;" 2>/dev/null
+}
+
+typeless_check_done() {
+  local anchor_rowid="$1"
+  local anchor_updated_at="$2"
+  sqlite3 "$TYPELESS_DB" \
+    "SELECT status FROM history WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND status IN ('transcript','dismissed') ORDER BY rowid ASC LIMIT 1;" 2>/dev/null
 }
 
 typeless_has_record() {
-  local save_ts="$1"
+  local anchor_rowid="$1"
+  local anchor_updated_at="$2"
   sqlite3 "$TYPELESS_DB" \
-    "SELECT 1 FROM history WHERE created_at >= '$save_ts' LIMIT 1;" 2>/dev/null
+    "SELECT 1 FROM history WHERE rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}') LIMIT 1;" 2>/dev/null
 }
 
 typeless_check_stale() {
-  local save_ts="$1"
+  local anchor_rowid="$1"
+  local anchor_updated_at="$2"
   local stale_seconds=5
   sqlite3 "$TYPELESS_DB" \
-    "SELECT 1 FROM history WHERE created_at >= '$save_ts' AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
+    "SELECT 1 FROM history WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
 }
 
 gui_send_enter() {
@@ -124,7 +137,12 @@ case "$1" in
     cleanup
     save_ts="$(utc_timestamp_ms)"
     [ -n "$save_ts" ] || save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+    anchor_rowid="$(typeless_last_rowid)"
+    [ -n "$anchor_rowid" ] || anchor_rowid=0
+    anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
     write_file save_ts "$save_ts"
+    write_file db_anchor_rowid "$anchor_rowid"
+    write_file db_anchor_updated_at "$anchor_updated_at"
 
     front_bundle="$(/usr/bin/osascript -e \
       'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
@@ -145,10 +163,10 @@ case "$1" in
     if [ -n "$pane" ]; then
       write_file mode tmux
       write_file pane_id "$pane"
-      log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts}"
+      log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
     else
       write_file mode gui
-      log "save mode=gui app=${front_bundle} save_ts=${save_ts}"
+      log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
     fi
     ;;
 
@@ -164,27 +182,27 @@ case "$1" in
       pane="$(read_file pane_id)"
       [ -n "$pane" ] || { cleanup; exit 0; }
       save_ts="$(read_file save_ts)"
-      log "watch mode=tmux pane=${pane} save_ts=${save_ts} polling"
+      anchor_rowid="$(read_file db_anchor_rowid)"
+      anchor_updated_at="$(read_file db_anchor_updated_at)"
+      [ -n "$anchor_rowid" ] || anchor_rowid=0
+      log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
 
       changed=0 i=0 done_status="" has_record=0
       while [ $i -lt 300 ]; do
         /bin/sleep 0.1
         i=$((i + 1))
-        done_status="$(typeless_check_done "$save_ts")"
+        done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
         if [ -n "$done_status" ]; then
           changed=1 && break
         fi
-        if [ $has_record -eq 0 ] && [ $i -eq 100 ]; then
-          if [ -z "$(typeless_has_record "$save_ts")" ]; then
-            log "watch tmux no_record_after_10s, abort"
-            clear_watch_state
-            /bin/rm -f "$STATE_DIR/watcher.pid"
-            exit 0
-          fi
+        if [ $has_record -eq 0 ] && [ -n "$(typeless_has_record "$anchor_rowid" "$anchor_updated_at")" ]; then
           has_record=1
+          log "watch tmux record_detected (${i} polls ~$((i / 10))s)"
+        elif [ $has_record -eq 0 ] && [ $i -eq 100 ]; then
+          log "watch tmux still_no_record_after_10s"
         fi
         if [ $has_record -eq 1 ] && [ $((i % 50)) -eq 0 ]; then
-          if [ -n "$(typeless_check_stale "$save_ts")" ]; then
+          if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
             log "watch tmux stale_record (${i} polls ~$((i / 10))s), abort"
             clear_watch_state
             /bin/rm -f "$STATE_DIR/watcher.pid"
@@ -221,27 +239,27 @@ case "$1" in
 
     elif [ "$mode" = "gui" ]; then
       save_ts="$(read_file save_ts)"
-      log "watch mode=gui save_ts=${save_ts} polling"
+      anchor_rowid="$(read_file db_anchor_rowid)"
+      anchor_updated_at="$(read_file db_anchor_updated_at)"
+      [ -n "$anchor_rowid" ] || anchor_rowid=0
+      log "watch mode=gui save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
 
       changed=0 i=0 has_record=0
       while [ $i -lt 300 ]; do
         /bin/sleep 0.1
         i=$((i + 1))
-        done_status="$(typeless_check_done "$save_ts")"
+        done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
         if [ -n "$done_status" ]; then
           changed=1 && break
         fi
-        if [ $has_record -eq 0 ] && [ $i -eq 100 ]; then
-          if [ -z "$(typeless_has_record "$save_ts")" ]; then
-            log "watch gui no_record_after_10s, abort"
-            clear_watch_state
-            /bin/rm -f "$STATE_DIR/watcher.pid"
-            exit 0
-          fi
+        if [ $has_record -eq 0 ] && [ -n "$(typeless_has_record "$anchor_rowid" "$anchor_updated_at")" ]; then
           has_record=1
+          log "watch gui record_detected (${i} polls ~$((i / 10))s)"
+        elif [ $has_record -eq 0 ] && [ $i -eq 100 ]; then
+          log "watch gui still_no_record_after_10s"
         fi
         if [ $has_record -eq 1 ] && [ $((i % 50)) -eq 0 ]; then
-          if [ -n "$(typeless_check_stale "$save_ts")" ]; then
+          if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
             log "watch gui stale_record (${i} polls ~$((i / 10))s), abort"
             clear_watch_state
             /bin/rm -f "$STATE_DIR/watcher.pid"
