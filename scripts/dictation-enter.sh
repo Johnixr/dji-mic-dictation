@@ -1017,10 +1017,11 @@ preconfirm)
 	;;
 
 confirm)
-	kill_old_watcher
 	dismiss_ready_hud
-	set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
+	play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
 	send_current_mode_enter confirm
+	kill_old_watcher
+	set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 	cleanup
 	;;
 esac

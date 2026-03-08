@@ -502,6 +502,21 @@ def test_preconfirm_skips_sound_when_preconfirm_sound_is_disabled(harness):
     assert harness.afplay_calls() == []
 
 
+def test_confirm_plays_feedback_sound(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    harness.run("confirm")
+
+    assert any("Sosumi.aiff" in call for call in harness.afplay_calls())
+    assert "confirm gui send_enter" in harness.log_text()
+
+
 def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_gui(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.run("save")
