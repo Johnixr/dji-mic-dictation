@@ -440,6 +440,41 @@ gui_send_enter() {
 	log "gui_send_enter: $bundle"
 }
 
+transcript_ready_since_save() {
+	[ -f "$STATE_DIR/save_ts" ] || return 1
+	local anchor_rowid
+	local anchor_updated_at
+	local done_status
+	anchor_rowid="$(read_file db_anchor_rowid)"
+	[ -n "$anchor_rowid" ] || anchor_rowid=0
+	anchor_updated_at="$(read_file db_anchor_updated_at)"
+	done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
+	[ "$done_status" = "transcript" ]
+}
+
+send_current_mode_enter() {
+	local source="$1"
+	local mode
+	local pane
+	mode="$(read_file mode)"
+	if [ "$mode" = "tmux" ]; then
+		pane="$(read_file pane_id)"
+		if [ -n "$pane" ]; then
+			$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
+			log "$source tmux send_enter pane=${pane}"
+			return 0
+		fi
+		log "$source tmux no_pane"
+		return 1
+	elif [ "$mode" = "gui" ]; then
+		gui_send_enter
+		log "$source gui send_enter"
+		return 0
+	fi
+	log "$source unknown mode"
+	return 1
+}
+
 if [ "$1" = "route" ]; then
 	branch="$2"
 	action="$3"
@@ -639,31 +674,23 @@ watch)
 
 preconfirm)
 	dismiss_ready_hud
-	write_file pending_confirm 1
-	play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
-	log "preconfirm queued"
+	if transcript_ready_since_save; then
+		kill_old_watcher
+		set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
+		send_current_mode_enter preconfirm
+		cleanup
+	else
+		write_file pending_confirm 1
+		play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
+		log "preconfirm queued"
+	fi
 	;;
 
 confirm)
 	kill_old_watcher
 	dismiss_ready_hud
 	set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
-
-	mode="$(read_file mode)"
-	if [ "$mode" = "tmux" ]; then
-		pane="$(read_file pane_id)"
-		if [ -n "$pane" ]; then
-			$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
-			log "confirm tmux send_enter pane=${pane}"
-		else
-			log "confirm tmux no_pane"
-		fi
-	elif [ "$mode" = "gui" ]; then
-		gui_send_enter
-		log "confirm gui send_enter"
-	else
-		log "confirm unknown mode"
-	fi
+	send_current_mode_enter confirm
 	cleanup
 	;;
 esac

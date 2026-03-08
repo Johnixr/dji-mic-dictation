@@ -68,7 +68,7 @@ def test_watch_tmux_preconfirm_send_handles_reused_row_update(harness):
     assert proc.returncode == 0, (stdout, stderr)
     log_text = harness.log_text()
     assert "watch tmux transcript_detected" in log_text
-    assert "watch tmux preconfirm_send" in log_text
+    assert "watch tmux preconfirm_send" in log_text or "preconfirm tmux send_enter" in log_text
     assert any("send-keys -t %1 Enter" in call for call in harness.tmux_calls())
 
 
@@ -307,6 +307,38 @@ def test_preconfirm_skips_sound_when_preconfirm_sound_is_disabled(harness):
     harness.run("preconfirm")
 
     assert harness.afplay_calls() == []
+
+
+def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_gui(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.run("save")
+    harness.insert_history(status="transcript", refined_text="ready now")
+
+    harness.run("preconfirm")
+
+    log_text = harness.log_text()
+    assert "preconfirm gui send_enter" in log_text
+    assert harness.read_state("mode") == ""
+    calls = harness.osascript_calls()
+    assert any(
+        "keystroke return" in " ".join(call["args"])
+        or "write text" in " ".join(call["args"])
+        for call in calls
+    )
+
+
+def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_tmux(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
+    harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
+    harness.run("save")
+    harness.insert_history(status="transcript", refined_text="ready now")
+
+    harness.run("preconfirm")
+
+    log_text = harness.log_text()
+    assert "preconfirm tmux send_enter pane=%1" in log_text
+    assert harness.read_state("mode") == ""
+    assert any("send-keys -t %1 Enter" in call for call in harness.tmux_calls())
 
 
 def test_watch_tmux_aborts_on_stale_record(harness):
