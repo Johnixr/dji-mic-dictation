@@ -40,6 +40,11 @@ DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-Sosumi}"
 DJI_ENABLE_READY_HUD="${DJI_ENABLE_READY_HUD:-1}"
 HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$STATE_DIR/send-window-hud.swift}"
 HUD_BIN="${HUD_BIN:-$STATE_DIR/send-window-hud}"
+HUD_DAEMON_PID_FILE="${HUD_DAEMON_PID_FILE:-$STATE_DIR/send-window-hud.pid}"
+HUD_DAEMON_COMMAND_FILE="${HUD_DAEMON_COMMAND_FILE:-$STATE_DIR/send-window-hud.command}"
+HUD_DAEMON_READY_FILE="${HUD_DAEMON_READY_FILE:-$STATE_DIR/send-window-hud.ready}"
+HUD_DAEMON_READY_INTERVAL="${HUD_DAEMON_READY_INTERVAL:-0.01}"
+HUD_DAEMON_READY_POLLS="${HUD_DAEMON_READY_POLLS:-50}"
 
 /bin/mkdir -p "$STATE_DIR"
 
@@ -80,6 +85,12 @@ dismiss_ready_hud() {
 		return 0
 	fi
 	pid="$(read_file ready_hud.pid)"
+	if hud_daemon_is_running; then
+		[ -n "$pid" ] || return 0
+		send_hud_daemon_command hide >/dev/null 2>&1 || true
+		/bin/rm -f "$STATE_DIR/ready_hud.pid"
+		return 0
+	fi
 	[ -n "$pid" ] && /bin/kill "$pid" 2>/dev/null
 	/bin/rm -f "$STATE_DIR/ready_hud.pid"
 }
@@ -88,20 +99,30 @@ write_send_window_hud_source() {
 	local output_path="$1"
 	cat >"$output_path" <<'SWIFT'
 import AppKit
+import Foundation
+import Darwin
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 	let duration: TimeInterval
 	let warmup: Bool
+	let daemon: Bool
+	let controlPath: String?
+	let readyPath: String?
 	let width: CGFloat = 132
 	let height: CGFloat = 34
 	let cornerRadius: CGFloat = 17
 	let fillBleed: CGFloat = 1.0
 	var panel: NSPanel?
 	var progressFillLayer: CALayer?
+	var hideWorkItem: DispatchWorkItem?
+	var signalSource: DispatchSourceSignal?
 
-	init(duration: TimeInterval, warmup: Bool) {
+	init(duration: TimeInterval, warmup: Bool, daemon: Bool, controlPath: String?, readyPath: String?) {
 		self.duration = max(0.1, duration)
 		self.warmup = warmup
+		self.daemon = daemon
+		self.controlPath = controlPath
+		self.readyPath = readyPath
 	}
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
@@ -112,6 +133,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			}
 			return
 		}
+
+		if daemon {
+			guard let readyPath else {
+				NSApp.terminate(nil)
+				return
+			}
+			setupCommandHandler()
+			FileManager.default.createFile(atPath: readyPath, contents: Data(), attributes: nil)
+			return
+		}
+
+		showPanel(duration: duration, terminateOnHide: true)
+	}
+
+	func applicationWillTerminate(_ notification: Notification) {
+		if let readyPath {
+			try? FileManager.default.removeItem(atPath: readyPath)
+		}
+	}
+
+	func setupCommandHandler() {
+		signal(SIGUSR1, SIG_IGN)
+		let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+		source.setEventHandler { [weak self] in
+			self?.handleCommandSignal()
+		}
+		source.resume()
+		signalSource = source
+	}
+
+	func handleCommandSignal() {
+		guard let controlPath,
+			let command = try? String(contentsOfFile: controlPath, encoding: .utf8)
+				.trimmingCharacters(in: .whitespacesAndNewlines),
+			!command.isEmpty
+		else {
+			return
+		}
+
+		let parts = command.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+		switch parts.first {
+		case "show":
+			let requestedDuration = TimeInterval(parts.dropFirst().first ?? "") ?? duration
+			showPanel(duration: requestedDuration, terminateOnHide: false)
+		case "hide":
+			hidePanel()
+		case "stop":
+			hidePanel()
+			NSApp.terminate(nil)
+		default:
+			break
+		}
+	}
+
+	func showPanel(duration: TimeInterval, terminateOnHide: Bool) {
+		hideWorkItem?.cancel()
+		hideWorkItem = nil
+		hidePanel()
 
 		let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main ?? NSScreen.screens[0]
 
@@ -168,13 +247,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		panel.orderFrontRegardless()
 		self.panel = panel
 
-		startProgressAnimation()
-		DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-			NSApp.terminate(nil)
+		startProgressAnimation(duration: duration)
+		let workItem = DispatchWorkItem { [weak self] in
+			self?.hidePanel()
+			if terminateOnHide {
+				NSApp.terminate(nil)
+			}
 		}
+		hideWorkItem = workItem
+		DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: workItem)
 	}
 
-	func startProgressAnimation() {
+	func hidePanel() {
+		progressFillLayer?.removeAllAnimations()
+		progressFillLayer = nil
+		panel?.orderOut(nil)
+		panel?.close()
+		panel = nil
+	}
+
+	func startProgressAnimation(duration: TimeInterval) {
 		let maxFillWidth = width + fillBleed
 		CATransaction.begin()
 		CATransaction.setDisableActions(true)
@@ -193,10 +285,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-let warmup = arguments.contains("--warmup")
-let duration = TimeInterval(arguments.first(where: { $0 != "--warmup" }) ?? "") ?? 3
+var warmup = false
+var daemon = false
+var duration: TimeInterval = 3
+var controlPath: String?
+var readyPath: String?
+
+var index = 0
+while index < arguments.count {
+	let argument = arguments[index]
+	switch argument {
+	case "--warmup":
+		warmup = true
+	case "--daemon":
+		daemon = true
+		if index + 1 < arguments.count {
+			controlPath = arguments[index + 1]
+			index += 1
+		}
+		if index + 1 < arguments.count {
+			readyPath = arguments[index + 1]
+			index += 1
+		}
+	default:
+		if let parsedDuration = TimeInterval(argument) {
+			duration = parsedDuration
+		}
+	}
+	index += 1
+}
+
 let app = NSApplication.shared
-let delegate = AppDelegate(duration: duration, warmup: warmup)
+let delegate = AppDelegate(duration: duration, warmup: warmup, daemon: daemon, controlPath: controlPath, readyPath: readyPath)
 app.setActivationPolicy(.accessory)
 app.delegate = delegate
 app.run()
@@ -230,9 +350,52 @@ ensure_send_window_hud_binary() {
 	[ -x "$HUD_BIN" ]
 }
 
+stop_send_window_hud_daemon() {
+	local pid
+	pid="$(hud_daemon_pid)"
+	if [ -n "$pid" ] && /bin/kill -0 "$pid" 2>/dev/null; then
+		write_path_file "$HUD_DAEMON_COMMAND_FILE" stop
+		/bin/kill -USR1 "$pid" 2>/dev/null
+		if ! wait_for_process_exit "$pid" "$HUD_DAEMON_READY_POLLS" "$HUD_DAEMON_READY_INTERVAL"; then
+			/bin/kill -9 "$pid" 2>/dev/null
+			wait_for_process_exit "$pid" 5 "$HUD_DAEMON_READY_INTERVAL" >/dev/null 2>&1
+		fi
+	fi
+	/bin/rm -f "$HUD_DAEMON_PID_FILE" "$HUD_DAEMON_COMMAND_FILE" "$HUD_DAEMON_READY_FILE"
+}
+
+start_send_window_hud_daemon() {
+	[ -x "$HUD_BIN" ] || return 1
+	stop_send_window_hud_daemon
+	"$HUD_BIN" --daemon "$HUD_DAEMON_COMMAND_FILE" "$HUD_DAEMON_READY_FILE" >/dev/null 2>&1 &
+	write_path_file "$HUD_DAEMON_PID_FILE" "$!"
+	if ! wait_for_path "$HUD_DAEMON_READY_FILE"; then
+		stop_send_window_hud_daemon
+		log "hud daemon start failed"
+		return 1
+	fi
+	log "hud daemon started pid=$(hud_daemon_pid)"
+	return 0
+}
+
+ensure_send_window_hud_daemon() {
+	hud_daemon_is_running && [ -f "$HUD_DAEMON_READY_FILE" ] && return 0
+	start_send_window_hud_daemon
+}
+
+send_hud_daemon_command() {
+	local command="$1"
+	local pid
+	ensure_send_window_hud_daemon || return 1
+	pid="$(hud_daemon_pid)"
+	[ -n "$pid" ] || return 1
+	write_path_file "$HUD_DAEMON_COMMAND_FILE" "$command"
+	/bin/kill -USR1 "$pid" 2>/dev/null
+}
+
 warmup_send_window_hud() {
 	[ -x "$HUD_BIN" ] || return 0
-	"$HUD_BIN" --warmup >/dev/null 2>&1 &
+	ensure_send_window_hud_daemon || return 0
 }
 
 prepare_send_window_hud_if_enabled() {
@@ -254,6 +417,11 @@ show_send_window_hud() {
 			return 0
 		}
 	fi
+	if send_hud_daemon_command "show|$duration"; then
+		write_file ready_hud.pid "$(hud_daemon_pid)"
+		return 0
+	fi
+	stop_send_window_hud_daemon >/dev/null 2>&1 || true
 	"$HUD_BIN" "$duration" >/dev/null 2>&1 &
 	write_file ready_hud.pid "$!"
 }
@@ -289,6 +457,30 @@ log() { /usr/bin/printf '%s %s\n' "$(timestamp)" "$*" >>"$LOG"; }
 
 read_file() { /bin/cat "$STATE_DIR/$1" 2>/dev/null; }
 write_file() { /usr/bin/printf '%s' "$2" >"$STATE_DIR/$1"; }
+write_path_file() { /usr/bin/printf '%s' "$2" >"$1"; }
+
+wait_for_path() {
+	local path="$1"
+	local polls="${2:-$HUD_DAEMON_READY_POLLS}"
+	local interval="${3:-$HUD_DAEMON_READY_INTERVAL}"
+	local i=0
+	while [ $i -lt "$polls" ]; do
+		[ -e "$path" ] && return 0
+		/bin/sleep "$interval"
+		i=$((i + 1))
+	done
+	return 1
+}
+
+hud_daemon_pid() {
+	/bin/cat "$HUD_DAEMON_PID_FILE" 2>/dev/null
+}
+
+hud_daemon_is_running() {
+	local pid
+	pid="$(hud_daemon_pid)"
+	[ -n "$pid" ] && /bin/kill -0 "$pid" 2>/dev/null
+}
 
 generate_session_id() {
 	if [ -n "$PYTHON3_BIN" ]; then
@@ -360,7 +552,7 @@ cleanup() {
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
-	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id}
+	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,window_deadline}
 }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
@@ -416,14 +608,31 @@ sleep_until_deadline() {
 	fi
 }
 
-start_send_window() {
-	local mode="$1"
+open_send_window() {
+	local log_label="$1"
 	local expected_session_id="${2:-}"
 	local deadline
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
 	show_send_window_hud_if_enabled "$CONFIRM_WINDOW" "$expected_session_id"
 	deadline="$(window_deadline_timestamp "$CONFIRM_WINDOW")"
-	log "watch ${mode} send_window_started window=${CONFIRM_WINDOW}s deadline=${deadline}"
+	write_file window_deadline "$deadline"
+	log "${log_label} send_window_started window=${CONFIRM_WINDOW}s deadline=${deadline}"
 	printf '%s' "$deadline"
+}
+
+reuse_or_open_send_window() {
+	local log_label="$1"
+	local expected_session_id="${2:-}"
+	local deadline
+	deadline="$(read_file window_deadline)"
+	if [ -n "$deadline" ] && deadline_has_remaining "$deadline"; then
+		log "${log_label} send_window_reused window=${CONFIRM_WINDOW}s deadline=${deadline}"
+		printf '%s' "$deadline"
+		return 0
+	fi
+	open_send_window "$log_label" "$expected_session_id"
 }
 
 expire_send_window() {
@@ -434,6 +643,7 @@ expire_send_window() {
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
+	/bin/rm -f "$STATE_DIR/window_deadline"
 	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
 	log "watch ${mode} window_expired"
 	if [ "$keep_watcher" != "1" ]; then
@@ -637,7 +847,7 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		window_deadline="$(start_send_window tmux "$watch_session_id")"
+		window_deadline="$(reuse_or_open_send_window "watch tmux" "$watch_session_id")"
 
 		changed=0 i=0 done_status="" has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
@@ -706,7 +916,7 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=gui save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		window_deadline="$(start_send_window gui "$watch_session_id")"
+		window_deadline="$(reuse_or_open_send_window "watch gui" "$watch_session_id")"
 
 		changed=0 i=0 has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
@@ -772,6 +982,15 @@ watch)
 		log "watch unknown mode, exit"
 		/bin/rm -f "$STATE_DIR/watcher.pid"
 	fi
+	;;
+
+open-window)
+	open_window_session_id="$(current_session_id)"
+	if [ -z "$open_window_session_id" ]; then
+		open_window_session_id="$(wait_for_state_value session_id)"
+	fi
+	[ -n "$open_window_session_id" ] || exit 0
+	reuse_or_open_send_window open_window "$open_window_session_id" >/dev/null
 	;;
 
 preconfirm)

@@ -173,17 +173,49 @@ output_path = args[args.index("-o") + 1]
 script = Path(output_path)
 script.write_text({repr(textwrap.dedent(f'''#!/usr/bin/env {python}
 import os
+from pathlib import Path
+import signal
 import shlex
 import sys
 import time
 
 log = os.environ["HUD_LOG_FILE"]
-with open(log, "a", encoding="utf-8") as fh:
-    fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+
+def append(entry):
+	with open(log, "a", encoding="utf-8") as fh:
+		fh.write(entry + "\\n")
+
+args = sys.argv[1:]
+append(" ".join(shlex.quote(arg) for arg in args))
+
+if "--daemon" in args:
+	idx = args.index("--daemon")
+	control_path = Path(args[idx + 1])
+	ready_path = Path(args[idx + 2])
+	ready_path.write_text("ready", encoding="utf-8")
+	running = [True]
+
+	def handle_command(_signum, _frame):
+		command = control_path.read_text(encoding="utf-8").strip() if control_path.exists() else ""
+		append(f"command {{command}}")
+		if command == "stop":
+			running[0] = False
+
+	def handle_term(_signum, _frame):
+		running[0] = False
+
+	signal.signal(signal.SIGUSR1, handle_command)
+	signal.signal(signal.SIGTERM, handle_term)
+	while running[0]:
+		time.sleep(0.01)
+	if ready_path.exists():
+		ready_path.unlink()
+	sys.exit(0)
+
 duration = os.environ.get("HUD_STUB_SLEEP")
 if duration is None:
-    visible_args = [arg for arg in sys.argv[1:] if arg != "--warmup"]
-    duration = visible_args[0] if visible_args else "0"
+	visible_args = [arg for arg in args if arg != "--warmup"]
+	duration = visible_args[0] if visible_args else "0"
 time.sleep(float(duration))
 '''))}, encoding="utf-8")
 script.chmod(0o755)

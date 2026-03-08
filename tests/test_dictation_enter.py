@@ -11,11 +11,20 @@ def _is_send_window_hud_call(call):
 
 
 def _visible_send_window_hud_calls(harness):
-    return [call for call in harness.hud_calls() if call.strip() and "--warmup" not in call]
+    calls = []
+    for call in harness.hud_calls():
+        stripped = call.strip()
+        if not stripped or stripped == "--warmup" or stripped.startswith("--daemon "):
+            continue
+        if stripped.startswith("command show|"):
+            calls.append(stripped.split("|", 1)[1])
+        elif not stripped.startswith("command "):
+            calls.append(stripped)
+    return calls
 
 
 def _warmup_hud_calls(harness):
-    return [call for call in harness.hud_calls() if "--warmup" in call]
+    return [call for call in harness.hud_calls() if call.startswith("--daemon ") or "--warmup" in call]
 
 
 def _wait_for_hud_warmup(harness, timeout=1.0):
@@ -328,6 +337,55 @@ def test_watch_gui_ready_feedback_shows_send_window_hud_when_enabled(harness):
     assert harness.swiftc_calls() != []
 
 
+def test_open_window_shows_ready_hud_before_watch_and_watch_reuses_it(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    harness.run("open-window")
+
+    first_deadline = harness.read_state("window_deadline")
+    assert first_deadline != ""
+    assert _visible_send_window_hud_calls(harness) == [harness.env["CONFIRM_WINDOW"]]
+    assert "command hide" not in harness.hud_calls()
+
+    def insert_transcript():
+        time.sleep(0.05)
+        harness.insert_history(status="transcript", refined_text="reuse existing send window")
+
+    worker = threading.Thread(target=insert_transcript)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert _visible_send_window_hud_calls(harness) == [harness.env["CONFIRM_WINDOW"]]
+    assert "watch gui send_window_reused" in harness.log_text()
+
+
+def test_save_reuses_existing_hud_daemon_without_restart(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    daemon_calls = [call for call in _warmup_hud_calls(harness) if call.startswith("--daemon ")]
+    first_daemon_pid = harness.read_state("send-window-hud.pid")
+
+    harness.run("save")
+
+    assert [call for call in _warmup_hud_calls(harness) if call.startswith("--daemon ")] == daemon_calls
+    assert harness.read_state("send-window-hud.pid") == first_daemon_pid
+
+
 def test_save_prepares_ready_hud_before_watch_to_avoid_cold_start_delay(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.env["SWIFTC_STUB_SLEEP"] = "0.2"
@@ -340,7 +398,7 @@ def test_save_prepares_ready_hud_before_watch_to_avoid_cold_start_delay(harness)
     harness.run("save")
     compile_count_after_save = len(harness.swiftc_calls())
     hud_source = (harness.state_dir / "send-window-hud.swift").read_text(encoding="utf-8")
-    assert _wait_for_hud_warmup(harness) == ["--warmup"]
+    assert any(call.startswith("--daemon ") for call in _wait_for_hud_warmup(harness))
 
     def insert_transcript():
         time.sleep(0.05)
@@ -386,7 +444,7 @@ def test_watch_uses_prepared_hud_binary_without_requiring_swiftc(harness):
     assert proc.returncode == 0, (stdout, stderr)
     assert compile_count_after_save == 1
     assert len(harness.swiftc_calls()) == compile_count_after_save
-    assert _wait_for_hud_warmup(harness) == ["--warmup"]
+    assert any(call.startswith("--daemon ") for call in _wait_for_hud_warmup(harness))
     assert any(_is_send_window_hud_call(call) for call in _visible_send_window_hud_calls(harness))
 
 

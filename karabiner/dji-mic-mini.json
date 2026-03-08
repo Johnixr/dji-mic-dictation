@@ -93,7 +93,7 @@
                             "key_code": "fn"
                         },
                         {
-                            "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &"
+                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route fn-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &"
                         }
                     ],
                     "type": "basic"
@@ -297,7 +297,7 @@
                             "key_code": "fn"
                         },
                         {
-                            "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &"
+                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &"
                         }
                     ],
                     "type": "basic"

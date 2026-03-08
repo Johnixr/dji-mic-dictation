@@ -119,6 +119,36 @@ def test_escape_clears_dictation_active_while_preserving_escape_key():
     ]
 
 
+def test_second_press_routes_open_send_window_before_watcher_starts():
+    rule = load_rule()
+
+    fn_watch = next(
+        manip
+        for manip in rule["manipulators"]
+        if manip.get("from", {}).get("key_code") == "fn"
+        and any(
+            " route fn-watch watch " in cmd
+            for cmd in shell_commands(manip.get("to", []))
+        )
+    )
+    dji_watch = next(
+        manip
+        for manip in rule["manipulators"]
+        if manip.get("from", {}).get("consumer_key_code") == "volume_increment"
+        and any(
+            " route dji-watch watch " in cmd
+            for cmd in shell_commands(manip.get("to", []))
+        )
+    )
+
+    assert shell_commands(fn_watch.get("to", [])) == [
+        "~/.config/karabiner/scripts/dictation-enter.sh route fn-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &",
+    ]
+    assert shell_commands(dji_watch.get("to", [])) == [
+        "~/.config/karabiner/scripts/dictation-enter.sh route dji-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &",
+    ]
+
+
 def test_fn_and_dji_routes_are_present_in_expected_order():
     rule = load_rule()
 
@@ -135,12 +165,12 @@ def test_fn_and_dji_routes_are_present_in_expected_order():
     assert fn_routes == [
         "~/.config/karabiner/scripts/dictation-enter.sh route fn-confirm confirm 2>/dev/null",
         "~/.config/karabiner/scripts/dictation-enter.sh route fn-preconfirm preconfirm 2>/dev/null",
-        "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &",
+        "~/.config/karabiner/scripts/dictation-enter.sh route fn-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &",
         "~/.config/karabiner/scripts/dictation-enter.sh route fn-save save 2>/dev/null",
     ]
     assert dji_routes == [
         "~/.config/karabiner/scripts/dictation-enter.sh route dji-confirm confirm 2>/dev/null",
         "~/.config/karabiner/scripts/dictation-enter.sh route dji-preconfirm preconfirm 2>/dev/null",
-        "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &",
+        "~/.config/karabiner/scripts/dictation-enter.sh route dji-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &",
         "~/.config/karabiner/scripts/dictation-enter.sh route dji-save save 2>/dev/null",
     ]
