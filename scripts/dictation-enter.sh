@@ -18,7 +18,7 @@ TYPELESS_DB="${TYPELESS_DB:-$HOME/Library/Application Support/Typeless/typeless.
 CONFIRM_WINDOW="${CONFIRM_WINDOW:-4}"
 PRECONFIRM_GRACE_INTERVAL="${PRECONFIRM_GRACE_INTERVAL:-0.02}"
 PRECONFIRM_GRACE_POLLS="${PRECONFIRM_GRACE_POLLS:-4}"
-DELIVERY_DELAY="${DELIVERY_DELAY:-0.25}"
+DELIVERY_DELAY="${DELIVERY_DELAY:-0.05}"
 WATCH_POLL_INTERVAL="${WATCH_POLL_INTERVAL:-0.1}"
 WATCH_MAX_POLLS="${WATCH_MAX_POLLS:-300}"
 NO_RECORD_LOG_AFTER_POLLS="${NO_RECORD_LOG_AFTER_POLLS:-100}"
@@ -66,7 +66,7 @@ play_feedback_sound() {
 	local sound_name="$1"
 	[ "$DJI_ENABLE_AUDIO_FEEDBACK" = "1" ] || return 0
 	[ -n "$sound_name" ] || return 0
-	"$AFPLAY_BIN" "/System/Library/Sounds/${sound_name}.aiff" &
+	"$AFPLAY_BIN" -v 0.3 "/System/Library/Sounds/${sound_name}.aiff" &
 }
 
 dismiss_ready_hud() {
@@ -428,17 +428,15 @@ typeless_check_stale() {
 gui_send_enter() {
 	local bundle
 	bundle="$("$OSASCRIPT_BIN" -e \
-		'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
-	case "$bundle" in
-	com.googlecode.iterm2)
+		'tell application "System Events"
+			set bid to bundle identifier of first application process whose frontmost is true
+			if bid is not "com.googlecode.iterm2" then keystroke return
+			return bid
+		end tell' 2>/dev/null)"
+	if [ "$bundle" = "com.googlecode.iterm2" ]; then
 		"$OSASCRIPT_BIN" -e \
 			'tell application "iTerm2" to tell current window to tell current session to write text ""' 2>/dev/null
-		;;
-	*)
-		"$OSASCRIPT_BIN" -e \
-			'tell application "System Events" to keystroke return' 2>/dev/null
-		;;
-	esac
+	fi
 	log "gui_send_enter: $bundle"
 }
 
@@ -552,8 +550,8 @@ watch)
 					exit 0
 				fi
 				/bin/sleep "$DELIVERY_DELAY"
-				clear_watch_state
 				$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
+				clear_watch_state
 				log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
 				cleanup
 			else
@@ -617,8 +615,8 @@ watch)
 					exit 0
 				fi
 				/bin/sleep "$DELIVERY_DELAY"
-				clear_watch_state
 				gui_send_enter
+				clear_watch_state
 				log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
 				cleanup
 			else
