@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import { execFile as execFileCallback } from 'node:child_process';
+import fs from 'node:fs/promises';
 import process from 'node:process';
+import { promisify } from 'node:util';
 
 import {
 	cancel,
@@ -27,8 +30,25 @@ import {
 } from './lib/actions.mjs';
 import { loadConfig } from './lib/config.mjs';
 import { buildInstallProfilePromptPlan } from './lib/install-profile-plan.mjs';
+import { detectPermissions } from './lib/permissions.mjs';
 import { createRuntime } from './lib/runtime.mjs';
 import { listSystemSounds } from './lib/sounds.mjs';
+
+const execFile = promisify(execFileCallback);
+
+const KARABINER_APP_NAME = 'Karabiner-Elements';
+const ACCESSIBILITY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+const INPUT_MONITORING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent';
+const DICTATION_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.keyboard?Dictation';
+const KARABINER_READY_TIMEOUT_MS = 8000;
+const KARABINER_RECHECK_TIMEOUT_MS = 2000;
+const FILE_WAIT_INTERVAL_MS = 200;
+const INSTALL_BLOCKING_PERMISSION_KEYS = new Set([
+	'karabinerInputMonitoring',
+	'accessibilityCurrentSession',
+	'postEventCurrentSession',
+	'dictation',
+]);
 
 const HELP_TEXT = `dji-mic-dictation <command> [options]
 
@@ -278,6 +298,57 @@ function createProgress(enabled) {
 	return spinner();
 }
 
+function createCliError(message, code, cause) {
+	const error = new Error(message);
+	error.code = code;
+	if (cause) {
+		error.cause = cause;
+	}
+	return error;
+}
+
+async function pathExists(filePath) {
+	try {
+		await fs.access(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPath(filePath, timeoutMs) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (await pathExists(filePath)) {
+			return true;
+		}
+		await sleep(FILE_WAIT_INTERVAL_MS);
+	}
+	return pathExists(filePath);
+}
+
+async function openApplication(appName) {
+	try {
+		await execFile('open', ['-a', appName]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function openSettingsPanel(url) {
+	try {
+		await execFile('open', [url]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function isPermissionSatisfied(status) {
 	return ['granted', 'enabled', 'ok'].includes(status);
 }
@@ -501,11 +572,137 @@ async function collectInteractiveProfileOptions(runtime) {
 	};
 }
 
+async function brewInstallKarabiner(showUi) {
+	const s = createProgress(showUi);
+	s.start('Installing Karabiner-Elements via Homebrew');
+	try {
+		await execFile('brew', ['install', '--cask', 'karabiner-elements']);
+		s.stop('Karabiner-Elements installed');
+	} catch (error) {
+		s.stop('Karabiner-Elements installation failed');
+		const detail = [error.stderr, error.stdout, error.message]
+			.map((value) => value?.trim())
+			.find(Boolean);
+		throw createCliError(
+			`Failed to install Karabiner-Elements via Homebrew${detail ? `: ${detail}` : '.'}`,
+			'KARABINER_INSTALL_FAILED',
+			error,
+		);
+	}
+}
+
+async function ensureKarabinerConfigReady(runtime, interactive) {
+	if (await pathExists(runtime.karabinerConfigPath)) {
+		return;
+	}
+
+	await openApplication(KARABINER_APP_NAME);
+	if (await waitForPath(runtime.karabinerConfigPath, KARABINER_READY_TIMEOUT_MS)) {
+		return;
+	}
+
+	const errorMessage = `Karabiner-Elements is installed, but ${runtime.karabinerConfigPath} was not created. Open Karabiner-Elements once, then rerun install.`;
+	if (!interactive) {
+		throw createCliError(errorMessage, 'KARABINER_CONFIG_NOT_READY');
+	}
+
+	note(
+		'Karabiner-Elements must be opened once before install can continue.',
+		'Karabiner setup',
+	);
+	while (true) {
+		await openApplication(KARABINER_APP_NAME);
+		const shouldRetry = await askBooleanPrompt('Open Karabiner-Elements, then check again?', true);
+		if (!shouldRetry) {
+			cancel('Install paused until Karabiner-Elements has created its config file.');
+			process.exit(1);
+		}
+		if (await waitForPath(runtime.karabinerConfigPath, KARABINER_RECHECK_TIMEOUT_MS)) {
+			return;
+		}
+		note('Karabiner config file still not found. Open Karabiner-Elements once, then try again.', 'Not ready');
+	}
+}
+
+async function ensureKarabinerInstalled(runtime, flags, interactive) {
+	const karabinerCliExists = await pathExists(runtime.karabinerCliPath);
+	if (!karabinerCliExists) {
+		if (interactive && !flags.yes) {
+			note(
+				'Karabiner-Elements is required to install this workflow.',
+				'Missing dependency',
+			);
+			const shouldInstall = await askBooleanPrompt(
+				'Install Karabiner-Elements with Homebrew now?',
+				true,
+			);
+			if (!shouldInstall) {
+				cancel('Install cancelled because Karabiner-Elements is required.');
+				process.exit(1);
+			}
+		}
+
+		await brewInstallKarabiner(interactive);
+	}
+
+	await ensureKarabinerConfigReady(runtime, interactive);
+}
+
+function getBlockingPermissionIssues(permissions) {
+	if (!permissions || permissions.status === 'ok') {
+		return [];
+	}
+	return (permissions.items || []).filter(
+		(item) => INSTALL_BLOCKING_PERMISSION_KEYS.has(item.key) && !isPermissionSatisfied(item.status),
+	);
+}
+
+
+async function openPermissionPanels(issues) {
+	const issueKeys = new Set(issues.map((item) => item.key));
+	if (issueKeys.has('karabinerInputMonitoring')) {
+		await openSettingsPanel(INPUT_MONITORING_SETTINGS_URL);
+	}
+	if (issueKeys.has('accessibilityCurrentSession') || issueKeys.has('postEventCurrentSession')) {
+		await openSettingsPanel(ACCESSIBILITY_SETTINGS_URL);
+	}
+	if (issueKeys.has('dictation')) {
+		await openSettingsPanel(DICTATION_SETTINGS_URL);
+	}
+}
+
+async function ensurePermissionsInteractive(runtime, initialPermissions) {
+	let permissions = initialPermissions;
+	while (true) {
+		permissions ??= await detectPermissions(runtime);
+		const issues = getBlockingPermissionIssues(permissions);
+		if (issues.length === 0) {
+			return permissions;
+		}
+
+		note(
+			issues.map((item) => formatPermissionAction(item)).join('\n'),
+			'Permissions needing attention',
+		);
+
+		await openPermissionPanels(issues);
+
+		const retry = await askBooleanPrompt('Check permissions again after updating System Settings?', true);
+		if (!retry) {
+			cancel('Install paused until the required permissions are granted.');
+			process.exit(1);
+		}
+		permissions = null;
+	}
+}
+
 async function retryableInstall(runtime, flags, interactive) {
 	const showUi = interactive;
 	let configOverrides = buildConfigOverrides(flags);
 	const explicitProfileOverrides = buildProfileOverrides(flags);
 	const explicitTriggerMode = flags.triggerMode;
+
+	await ensureKarabinerInstalled(runtime, flags, interactive);
 
 	while (true) {
 		const s = createProgress(showUi);
@@ -547,6 +744,8 @@ async function retryableInstall(runtime, flags, interactive) {
 				);
 			}
 			if (showUi) {
+				result.permissions = await ensurePermissionsInteractive(runtime, result.permissions);
+			} else if (!flags.json) {
 				printPermissionsReminder(result.permissions);
 			}
 			if (showUi && result.triggerMode === 'keyboard+dji' && result.device.status !== 'connected') {

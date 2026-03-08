@@ -14,6 +14,11 @@ import { listSystemSounds } from '../cli/lib/sounds.mjs';
 
 const execFileAsync = promisify(execFile);
 
+async function writeExecutable(filePath, content) {
+	await fs.writeFile(filePath, content, 'utf-8');
+	await fs.chmod(filePath, 0o755);
+}
+
 async function createFixture() {
 	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dji-cli-test-'));
 	const homeDir = path.join(tempDir, 'home');
@@ -34,37 +39,33 @@ async function createFixture() {
 	]);
 
 	const karabinerConfigPath = path.join(karabinerDir, 'karabiner.json');
-	await fs.writeFile(
-		karabinerConfigPath,
-		JSON.stringify(
-			{
-				profiles: [
-					{
-						name: 'Primary',
-						selected: true,
-						complex_modifications: {
-							rules: [{ description: 'keep-me', manipulators: [] }],
-						},
-						devices: [{ identifiers: { vendor_id: 1, product_id: 2 }, ignore: true }],
+	const karabinerConfigText = JSON.stringify(
+		{
+			profiles: [
+				{
+					name: 'Primary',
+					selected: true,
+					complex_modifications: {
+						rules: [{ description: 'keep-me', manipulators: [] }],
 					},
-					{
-						name: 'Secondary',
-						selected: false,
-						complex_modifications: { rules: [] },
-						devices: [],
-					},
-				],
-			},
-			null,
-			2,
-		),
+					devices: [{ identifiers: { vendor_id: 1, product_id: 2 }, ignore: true }],
+				},
+				{
+					name: 'Secondary',
+					selected: false,
+					complex_modifications: { rules: [] },
+					devices: [],
+				},
+			],
+		},
+		null,
+		2,
 	);
+	await fs.writeFile(karabinerConfigPath, karabinerConfigText, 'utf-8');
 	await fs.writeFile(path.join(typelessDir, 'typeless.db'), 'stub', 'utf-8');
 
 	const karabinerCliPath = path.join(binDir, 'karabiner_cli');
-	await fs.writeFile(
-		karabinerCliPath,
-		`#!/bin/sh
+	const karabinerCliScript = `#!/bin/sh
 if [ -n "$FAKE_CONNECTED_DEVICES_OUTPUT" ]; then
 	printf "%b" "$FAKE_CONNECTED_DEVICES_OUTPUT"
 else
@@ -82,13 +83,12 @@ else
 ]
 EOF
 fi
-`,
-		'utf-8',
-	);
-	await fs.chmod(karabinerCliPath, 0o755);
+	`;
+	await writeExecutable(karabinerCliPath, karabinerCliScript);
 
 	const env = {
 		...process.env,
+		PATH: `${binDir}:${process.env.PATH}`,
 		DJI_INSTALLER_HOME: homeDir,
 		DJI_KARABINER_CLI: karabinerCliPath,
 		DJI_SOUND_DIR: soundDir,
@@ -104,7 +104,11 @@ fi
 
 	return {
 		tempDir,
+		binDir,
 		env,
+		karabinerCliPath,
+		karabinerCliScript,
+		karabinerConfigText,
 		runtime: createRuntime({ env }),
 		karabinerConfigPath,
 	};
@@ -273,6 +277,105 @@ test('update refreshes manifest version and preserves config', async () => {
 	assert.equal(karabinerConfig.profiles.length, 3);
 });
 
+test('install throws KARABINER_CONFIG_MISSING when Karabiner config is absent', async () => {
+	const fixture = await createFixture();
+	await fs.rm(fixture.karabinerConfigPath);
+	await assert.rejects(
+		() => install(fixture.runtime, {}),
+		(error) => {
+			assert.equal(error.code, 'KARABINER_CONFIG_MISSING');
+			return true;
+		},
+	);
+});
+
+test('CLI install --json bootstraps Karabiner and waits for config creation', async () => {
+	const fixture = await createFixture();
+	const brewLogPath = path.join(fixture.tempDir, 'brew.log');
+	const openLogPath = path.join(fixture.tempDir, 'open.log');
+	const cliTemplatePath = path.join(fixture.tempDir, 'karabiner_cli.template');
+	await fs.writeFile(cliTemplatePath, fixture.karabinerCliScript, 'utf-8');
+	await fs.rm(fixture.karabinerConfigPath);
+	await fs.rm(fixture.karabinerCliPath);
+	await writeExecutable(
+		path.join(fixture.binDir, 'brew'),
+		`#!/bin/sh
+printf 'brew\n' >> "$DJI_TEST_BREW_LOG"
+mkdir -p "$(dirname "$DJI_KARABINER_CLI")"
+cat "$DJI_TEST_KARABINER_CLI_TEMPLATE" > "$DJI_KARABINER_CLI"
+chmod +x "$DJI_KARABINER_CLI"
+`,
+	);
+	await writeExecutable(
+		path.join(fixture.binDir, 'open'),
+		`#!/bin/sh
+printf '%s\n' "$*" >> "$DJI_TEST_OPEN_LOG"
+if [ "$1" = "-a" ] && [ "$2" = "Karabiner-Elements" ]; then
+	mkdir -p "$(dirname "$DJI_TEST_KARABINER_CONFIG_PATH")"
+	cat > "$DJI_TEST_KARABINER_CONFIG_PATH" <<'EOF'
+${fixture.karabinerConfigText}
+EOF
+fi
+`,
+	);
+	fixture.env.DJI_TEST_BREW_LOG = brewLogPath;
+	fixture.env.DJI_TEST_OPEN_LOG = openLogPath;
+	fixture.env.DJI_TEST_KARABINER_CLI_TEMPLATE = cliTemplatePath;
+	fixture.env.DJI_TEST_KARABINER_CONFIG_PATH = fixture.karabinerConfigPath;
+
+	const { stdout } = await execFileAsync(
+		process.execPath,
+		[path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'), 'install', '--yes', '--json'],
+		{ env: fixture.env },
+	);
+	const payload = JSON.parse(stdout);
+	assert.equal(payload.ok, true);
+	assert.equal(payload.command, 'install');
+	assert.equal(payload.result.profileName, 'Primary');
+	assert.match(await fs.readFile(brewLogPath, 'utf-8'), /brew/u);
+	assert.match(await fs.readFile(openLogPath, 'utf-8'), /Karabiner-Elements/u);
+	await fs.access(fixture.karabinerConfigPath);
+	await fs.access(fixture.karabinerCliPath);
+});
+
+test('CLI install --json returns actionable error when Karabiner config never appears', async () => {
+	const fixture = await createFixture();
+	const cliTemplatePath = path.join(fixture.tempDir, 'karabiner_cli.template');
+	await fs.writeFile(cliTemplatePath, fixture.karabinerCliScript, 'utf-8');
+	await fs.rm(fixture.karabinerConfigPath);
+	await fs.rm(fixture.karabinerCliPath);
+	await writeExecutable(
+		path.join(fixture.binDir, 'brew'),
+		`#!/bin/sh
+mkdir -p "$(dirname "$DJI_KARABINER_CLI")"
+cat "$DJI_TEST_KARABINER_CLI_TEMPLATE" > "$DJI_KARABINER_CLI"
+chmod +x "$DJI_KARABINER_CLI"
+`,
+	);
+	await writeExecutable(
+		path.join(fixture.binDir, 'open'),
+		`#!/bin/sh
+exit 0
+`,
+	);
+	fixture.env.DJI_TEST_KARABINER_CLI_TEMPLATE = cliTemplatePath;
+
+	await assert.rejects(
+		execFileAsync(
+			process.execPath,
+			[path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'), 'install', '--yes', '--json'],
+			{ env: fixture.env },
+		),
+		(error) => {
+			const payload = JSON.parse(error.stdout);
+			assert.equal(payload.ok, false);
+			assert.equal(payload.code, 'KARABINER_CONFIG_NOT_READY');
+			assert.match(payload.error, /Open Karabiner-Elements once/u);
+			return true;
+		},
+	);
+});
+
 test('doctor reports update availability and managed installation state', async () => {
 	const fixture = await createFixture();
 	await install(fixture.runtime, {});
@@ -341,6 +444,28 @@ test('CLI config command supports non-interactive JSON output', async () => {
 	assert.equal(payload.result.readyOverlayEnabled, false);
 	const configText = await fs.readFile(fixture.runtime.configFilePath, 'utf-8');
 	assert.match(configText, /DJI_ENABLE_READY_HUD=0/u);
+});
+
+test('CLI install --json preserves permission report when Dictation is disabled', async () => {
+	const fixture = await createFixture();
+	fixture.env.DJI_PERMISSION_CHECK_JSON = JSON.stringify({
+		items: [
+			{ key: 'karabinerInputMonitoring', label: 'Karabiner input monitoring', status: 'granted' },
+			{ key: 'accessibilityCurrentSession', label: 'Current session accessibility', status: 'granted' },
+			{ key: 'postEventCurrentSession', label: 'Current session event posting', status: 'granted' },
+			{ key: 'dictation', label: 'macOS Dictation', status: 'disabled' },
+		],
+	});
+
+	const { stdout } = await execFileAsync(
+		process.execPath,
+		[path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'), 'install', '--yes', '--json'],
+		{ env: fixture.env },
+	);
+	const payload = JSON.parse(stdout);
+	assert.equal(payload.ok, true);
+	assert.equal(payload.result.permissions.status, 'action_required');
+	assert.equal(payload.result.permissions.items.find((item) => item.key === 'dictation')?.status, 'disabled');
 });
 
 test('CLI config command supports setting preconfirm sound independently', async () => {
