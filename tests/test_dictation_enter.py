@@ -480,13 +480,13 @@ def test_preconfirm_plays_sound_but_does_not_show_ready_hud(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
-        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_PRECONFIRM_SOUND_NAME="ready",
         DJI_ENABLE_READY_HUD=1,
     )
 
     harness.run("preconfirm")
 
-    assert any("Sosumi.aiff" in call for call in harness.afplay_calls())
+    assert any("ready.wav" in call for call in harness.afplay_calls())
     assert harness.hud_calls() == []
 
 
@@ -506,14 +506,14 @@ def test_confirm_plays_feedback_sound(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
-        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_PRECONFIRM_SOUND_NAME="ready",
         DJI_ENABLE_READY_HUD=1,
     )
 
     harness.run("save")
     harness.run("confirm")
 
-    assert any("Sosumi.aiff" in call for call in harness.afplay_calls())
+    assert any("ready.wav" in call for call in harness.afplay_calls())
     assert "confirm gui send_enter" in harness.log_text()
 
 
