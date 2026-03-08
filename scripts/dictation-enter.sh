@@ -15,9 +15,9 @@ LOG="${LOG:-$STATE_DIR/debug.log}"
 TMUX_BIN="${TMUX_BIN:-$(command -v tmux 2>/dev/null || echo /opt/homebrew/bin/tmux)}"
 KCLI="${KCLI:-/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli}"
 TYPELESS_DB="${TYPELESS_DB:-$HOME/Library/Application Support/Typeless/typeless.db}"
-CONFIRM_WINDOW="${CONFIRM_WINDOW:-2}"
+CONFIRM_WINDOW="${CONFIRM_WINDOW:-4}"
 PRECONFIRM_GRACE_INTERVAL="${PRECONFIRM_GRACE_INTERVAL:-0.02}"
-PRECONFIRM_GRACE_POLLS="${PRECONFIRM_GRACE_POLLS:-50}"
+PRECONFIRM_GRACE_POLLS="${PRECONFIRM_GRACE_POLLS:-4}"
 DELIVERY_DELAY="${DELIVERY_DELAY:-0.25}"
 WATCH_POLL_INTERVAL="${WATCH_POLL_INTERVAL:-0.1}"
 WATCH_MAX_POLLS="${WATCH_MAX_POLLS:-300}"
@@ -28,12 +28,14 @@ STALE_SECONDS="${STALE_SECONDS:-5}"
 PYTHON3_BIN="${PYTHON3_BIN:-$(command -v python3 2>/dev/null)}"
 OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
 AFPLAY_BIN="${AFPLAY_BIN:-/usr/bin/afplay}"
+SWIFTC_BIN="${SWIFTC_BIN:-$(command -v swiftc 2>/dev/null)}"
 DJI_CONFIG_DIR="${DJI_CONFIG_DIR:-$HOME/.config/dji-mic-dictation}"
 DJI_CONFIG_FILE="${DJI_CONFIG_FILE:-$DJI_CONFIG_DIR/config.env}"
 DJI_ENABLE_AUDIO_FEEDBACK="${DJI_ENABLE_AUDIO_FEEDBACK:-1}"
-DJI_READY_SOUND_NAME="${DJI_READY_SOUND_NAME:-Tink}"
 DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-Sosumi}"
-DJI_ENABLE_WINDOW_SHAKE="${DJI_ENABLE_WINDOW_SHAKE:-1}"
+DJI_ENABLE_READY_HUD="${DJI_ENABLE_READY_HUD:-1}"
+HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$STATE_DIR/send-window-hud.swift}"
+HUD_BIN="${HUD_BIN:-$STATE_DIR/send-window-hud}"
 
 /bin/mkdir -p "$STATE_DIR"
 
@@ -67,16 +69,192 @@ play_feedback_sound() {
 	"$AFPLAY_BIN" "/System/Library/Sounds/${sound_name}.aiff" &
 }
 
-shake_window_if_enabled() {
-	[ "$DJI_ENABLE_WINDOW_SHAKE" = "1" ] || return 0
-	shake_window
+dismiss_ready_hud() {
+	local pid
+	pid="$(read_file ready_hud.pid)"
+	[ -n "$pid" ] && /bin/kill "$pid" 2>/dev/null
+	/bin/rm -f "$STATE_DIR/ready_hud.pid"
+}
+
+write_send_window_hud_source() {
+	local output_path="$1"
+	cat >"$output_path" <<'SWIFT'
+import AppKit
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+	let duration: TimeInterval
+	let warmup: Bool
+	let width: CGFloat = 132
+	let height: CGFloat = 34
+	let cornerRadius: CGFloat = 17
+	let fillBleed: CGFloat = 1.0
+	var panel: NSPanel?
+	var progressFillLayer: CALayer?
+
+	init(duration: TimeInterval, warmup: Bool) {
+		self.duration = max(0.1, duration)
+		self.warmup = warmup
+	}
+
+	func applicationDidFinishLaunching(_ notification: Notification) {
+		NSApp.appearance = NSAppearance(named: .darkAqua)
+		if warmup {
+			DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+				NSApp.terminate(nil)
+			}
+			return
+		}
+
+		let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main ?? NSScreen.screens[0]
+
+		let panel = NSPanel(
+			contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+			styleMask: [.borderless, .nonactivatingPanel],
+			backing: .buffered,
+			defer: false
+		)
+		panel.level = .statusBar
+		panel.isOpaque = false
+		panel.backgroundColor = .clear
+		panel.hasShadow = false
+		panel.ignoresMouseEvents = true
+		panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+
+		let view = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+		view.wantsLayer = true
+		view.layer?.backgroundColor = NSColor(red: 0, green: 0, blue: 0, alpha: 1).cgColor
+		view.layer?.cornerRadius = cornerRadius
+		view.layer?.borderWidth = 1
+		view.layer?.borderColor = NSColor(white: 1, alpha: 0.18).cgColor
+		view.layer?.masksToBounds = true
+		panel.contentView = view
+
+		let fillColor = NSColor(red: 242/255, green: 241/255, blue: 240/255, alpha: 0.25)
+		let textColor = NSColor(red: 242/255, green: 241/255, blue: 240/255, alpha: 0.56)
+
+		let progressFillLayer = CALayer()
+		progressFillLayer.anchorPoint = CGPoint(x: 0, y: 0.5)
+		progressFillLayer.position = CGPoint(x: -fillBleed, y: height / 2)
+		progressFillLayer.bounds = NSRect(x: 0, y: 0, width: 0, height: height + fillBleed * 2)
+		progressFillLayer.backgroundColor = fillColor.cgColor
+		view.layer?.addSublayer(progressFillLayer)
+		self.progressFillLayer = progressFillLayer
+
+		let label = NSTextField(labelWithString: "Press to send")
+		label.textColor = textColor
+		label.font = .systemFont(ofSize: 13, weight: .regular)
+		label.alignment = .center
+		label.isBezeled = false
+		label.isBordered = false
+		label.drawsBackground = false
+		label.isEditable = false
+		label.isSelectable = false
+		label.frame = NSRect(x: 0, y: 8, width: width, height: 18)
+		view.addSubview(label)
+
+		let visible = screen.visibleFrame
+		panel.setFrameOrigin(NSPoint(
+			x: visible.origin.x + round((visible.size.width - width) / 2),
+			y: visible.origin.y + 50
+		))
+		panel.orderFrontRegardless()
+		self.panel = panel
+
+		startProgressAnimation()
+		DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+			NSApp.terminate(nil)
+		}
+	}
+
+	func startProgressAnimation() {
+		let maxFillWidth = width + fillBleed
+		CATransaction.begin()
+		CATransaction.setDisableActions(true)
+		progressFillLayer?.bounds = NSRect(x: 0, y: 0, width: maxFillWidth, height: height + fillBleed * 2)
+		CATransaction.commit()
+
+		let animation = CABasicAnimation(keyPath: "bounds.size.width")
+		animation.fromValue = 0
+		animation.toValue = maxFillWidth
+		animation.duration = duration
+		animation.timingFunction = CAMediaTimingFunction(name: .linear)
+		animation.fillMode = .both
+		animation.isRemovedOnCompletion = false
+		progressFillLayer?.add(animation, forKey: "progress")
+	}
+}
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+let warmup = arguments.contains("--warmup")
+let duration = TimeInterval(arguments.first(where: { $0 != "--warmup" }) ?? "") ?? 3
+let app = NSApplication.shared
+let delegate = AppDelegate(duration: duration, warmup: warmup)
+app.setActivationPolicy(.accessory)
+app.delegate = delegate
+app.run()
+SWIFT
+}
+
+ensure_send_window_hud_binary() {
+	[ -n "$SWIFTC_BIN" ] || {
+		log "hud compile skipped: swiftc_missing"
+		return 1
+	}
+	local tmp_source
+	tmp_source="$STATE_DIR/send-window-hud.$$.swift.tmp"
+	write_send_window_hud_source "$tmp_source"
+	if [ ! -f "$HUD_SWIFT_SOURCE" ] || ! cmp -s "$tmp_source" "$HUD_SWIFT_SOURCE"; then
+		/bin/mv "$tmp_source" "$HUD_SWIFT_SOURCE"
+	else
+		/bin/rm -f "$tmp_source"
+	fi
+	if [ ! -x "$HUD_BIN" ] || [ "$HUD_SWIFT_SOURCE" -nt "$HUD_BIN" ]; then
+		local tmp_bin
+		tmp_bin="$STATE_DIR/send-window-hud.$$.tmp"
+		"$SWIFTC_BIN" "$HUD_SWIFT_SOURCE" -o "$tmp_bin" >/dev/null 2>&1 || {
+			log "hud compile failed"
+			/bin/rm -f "$tmp_bin" "$HUD_BIN"
+			return 1
+		}
+		/bin/chmod +x "$tmp_bin"
+		/bin/mv "$tmp_bin" "$HUD_BIN"
+	fi
+	[ -x "$HUD_BIN" ]
+}
+
+warmup_send_window_hud() {
+	[ -x "$HUD_BIN" ] || return 0
+	"$HUD_BIN" --warmup >/dev/null 2>&1 &
+}
+
+prepare_send_window_hud_if_enabled() {
+	[ "$DJI_ENABLE_READY_HUD" = "1" ] || return 0
+	ensure_send_window_hud_binary || return 0
+	warmup_send_window_hud
+}
+
+show_send_window_hud() {
+	local duration="$1"
+	dismiss_ready_hud
+	if [ ! -x "$HUD_BIN" ]; then
+		ensure_send_window_hud_binary || {
+			log "hud show skipped: binary_missing"
+			return 0
+		}
+	fi
+	"$HUD_BIN" "$duration" >/dev/null 2>&1 &
+	write_file ready_hud.pid "$!"
+}
+
+show_send_window_hud_if_enabled() {
+	[ "$DJI_ENABLE_READY_HUD" = "1" ] || return 0
+	show_send_window_hud "$1"
 }
 
 load_optional_config
 DJI_ENABLE_AUDIO_FEEDBACK="$(normalize_toggle "$DJI_ENABLE_AUDIO_FEEDBACK" 1)"
-DJI_READY_SOUND_NAME="$(normalize_sound_name "$DJI_READY_SOUND_NAME")"
 DJI_PRECONFIRM_SOUND_NAME="$(normalize_sound_name "$DJI_PRECONFIRM_SOUND_NAME")"
-DJI_ENABLE_WINDOW_SHAKE="$(normalize_toggle "$DJI_ENABLE_WINDOW_SHAKE" 1)"
+DJI_ENABLE_READY_HUD="$(normalize_toggle "$DJI_ENABLE_READY_HUD" 1)"
 
 timestamp() {
 	if [ -n "$PYTHON3_BIN" ]; then
@@ -107,11 +285,97 @@ kill_old_watcher() {
 	/bin/rm -f "$STATE_DIR/watcher.pid"
 }
 
-cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,win_pos}; }
+cleanup() {
+	dismiss_ready_hud
+	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid}
+}
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
-clear_watch_state() { set_vars '{"dji_watching":0,"dji_ready_to_send":0}'; }
+clear_watch_state() {
+	dismiss_ready_hud
+	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
+}
+
+window_deadline_timestamp() {
+	local duration="$1"
+	if [ -n "$PYTHON3_BIN" ]; then
+		WINDOW_DURATION="$duration" "$PYTHON3_BIN" - <<'PY' 2>/dev/null
+import os, time
+duration = float(os.environ.get('WINDOW_DURATION', '0'))
+print(f"{time.time() + max(0.0, duration):.3f}")
+PY
+	else
+		/bin/date +%s
+	fi
+}
+
+remaining_deadline_seconds() {
+	local deadline="$1"
+	if [ -n "$PYTHON3_BIN" ]; then
+		WINDOW_DEADLINE="$deadline" "$PYTHON3_BIN" - <<'PY' 2>/dev/null
+import os, time
+deadline = float(os.environ.get('WINDOW_DEADLINE', '0') or 0)
+print(f"{max(0.0, deadline - time.time()):.3f}")
+PY
+	else
+		echo 0
+	fi
+}
+
+deadline_has_remaining() {
+	local deadline="$1"
+	local remaining
+	remaining="$(remaining_deadline_seconds "$deadline")"
+	awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'
+}
+
+sleep_until_deadline() {
+	local deadline="$1"
+	local remaining
+	remaining="$(remaining_deadline_seconds "$deadline")"
+	if awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; then
+		/bin/sleep "$remaining"
+	fi
+}
+
+start_send_window() {
+	local mode="$1"
+	local deadline
+	show_send_window_hud_if_enabled "$CONFIRM_WINDOW"
+	deadline="$(window_deadline_timestamp "$CONFIRM_WINDOW")"
+	log "watch ${mode} send_window_started window=${CONFIRM_WINDOW}s deadline=${deadline}"
+	printf '%s' "$deadline"
+}
+
+expire_send_window() {
+	local mode="$1"
+	local keep_watcher="${2:-0}"
+	dismiss_ready_hud
+	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
+	log "watch ${mode} window_expired"
+	if [ "$keep_watcher" != "1" ]; then
+		/bin/rm -f "$STATE_DIR/watcher.pid"
+	fi
+}
+
+enter_ready_window() {
+	local mode="$1"
+	local deadline="$2"
+	local polls="$3"
+	local grace_polls="${4:-0}"
+	local remaining_window
+	remaining_window="$(remaining_deadline_seconds "$deadline")"
+	if ! awk -v remaining="$remaining_window" 'BEGIN { exit !(remaining > 0) }'; then
+		expire_send_window "$mode"
+		return
+	fi
+	set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
+	log "watch ${mode} content_settled (${polls} polls ~$((polls / 10))s grace_polls=${grace_polls}) remaining=${remaining_window}s"
+	sleep_until_deadline "$deadline"
+	set_vars '{"dji_ready_to_send":0}'
+	expire_send_window "$mode"
+}
 
 wait_for_pending_confirm() {
 	pending_confirm_polls=0
@@ -159,58 +423,6 @@ typeless_check_stale() {
 	local stale_seconds="$STALE_SECONDS"
 	sqlite3 "$TYPELESS_DB" \
 		"SELECT 1 FROM history WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
-}
-
-# 保存当前窗口位置并震动（跳过非标准窗口如水印层）
-shake_window() {
-	"$OSASCRIPT_BIN" -l JavaScript <<JS 2>/dev/null
-var se = Application("System Events");
-var fp = se.processes.whose({frontmost: true})[0];
-var wins = fp.windows();
-var fw = null;
-for (var i = 0; i < wins.length; i++) {
-  if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
-}
-if (!fw && wins.length > 0) fw = wins[0];
-if (!fw) { "no window"; } else {
-  var pos = fw.position();
-  var x = pos[0], y = pos[1];
-  var app = Application.currentApplication();
-  app.includeStandardAdditions = true;
-  app.doShellScript("printf '%s %s' " + x + " " + y + " > ${STATE_DIR}/win_pos");
-  for (var r = 0; r < 6; r++) {
-    fw.position = [x + 4, y]; delay(0.01);
-    fw.position = [x - 4, y]; delay(0.01);
-  }
-  delay(0.05); fw.position = [x, y];
-  delay(0.05); fw.position = [x, y];
-  "ok";
-}
-JS
-}
-
-# 强制归位窗口（confirm 时调用，防止抖动被中断后窗口偏移）
-restore_window() {
-	local saved
-	saved="$(read_file win_pos)"
-	[ -z "$saved" ] && return
-	local x y
-	x="${saved% *}"
-	y="${saved#* }"
-	"$OSASCRIPT_BIN" -l JavaScript - "$x" "$y" <<'JS' 2>/dev/null
-function run(argv) {
-  var x = parseInt(argv[0]), y = parseInt(argv[1]);
-  var se = Application("System Events");
-  var fp = se.processes.whose({frontmost: true})[0];
-  var wins = fp.windows();
-  var fw = null;
-  for (var i = 0; i < wins.length; i++) {
-    if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
-  }
-  if (!fw && wins.length > 0) fw = wins[0];
-  if (fw) { fw.position = [x, y]; }
-}
-JS
 }
 
 gui_send_enter() {
@@ -276,6 +488,7 @@ save)
 		write_file mode gui
 		log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
 	fi
+	prepare_send_window_hud_if_enabled
 	;;
 
 watch)
@@ -297,6 +510,7 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
+		window_deadline="$(start_send_window tmux)"
 
 		changed=0 i=0 done_status="" has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
@@ -320,25 +534,30 @@ watch)
 					exit 0
 				fi
 			fi
+			if ! deadline_has_remaining "$window_deadline"; then
+				expire_send_window tmux
+				exit 0
+			fi
 		done
 
 		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+			if ! deadline_has_remaining "$window_deadline"; then
+				expire_send_window tmux
+				exit 0
+			fi
 			log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then
+				if ! deadline_has_remaining "$window_deadline"; then
+					expire_send_window tmux
+					exit 0
+				fi
 				/bin/sleep "$DELIVERY_DELAY"
 				clear_watch_state
 				$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
 				log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
 				cleanup
 			else
-				set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
-				play_feedback_sound "$DJI_READY_SOUND_NAME"
-				shake_window_if_enabled
-				log "watch tmux content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
-				/bin/sleep "$CONFIRM_WINDOW"
-				set_vars '{"dji_ready_to_send":0}'
-				log "watch tmux window_expired"
-				/bin/rm -f "$STATE_DIR/watcher.pid"
+				enter_ready_window tmux "$window_deadline" "$i" "$pending_confirm_polls"
 			fi
 		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
 			clear_watch_state
@@ -356,6 +575,7 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=gui save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
+		window_deadline="$(start_send_window gui)"
 
 		changed=0 i=0 has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
@@ -379,25 +599,30 @@ watch)
 					exit 0
 				fi
 			fi
+			if ! deadline_has_remaining "$window_deadline"; then
+				expire_send_window gui
+				exit 0
+			fi
 		done
 
 		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+			if ! deadline_has_remaining "$window_deadline"; then
+				expire_send_window gui
+				exit 0
+			fi
 			log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then
+				if ! deadline_has_remaining "$window_deadline"; then
+					expire_send_window gui
+					exit 0
+				fi
 				/bin/sleep "$DELIVERY_DELAY"
 				clear_watch_state
 				gui_send_enter
 				log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
 				cleanup
 			else
-				set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
-				play_feedback_sound "$DJI_READY_SOUND_NAME"
-				shake_window_if_enabled
-				log "watch gui content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
-				/bin/sleep "$CONFIRM_WINDOW"
-				set_vars '{"dji_ready_to_send":0}'
-				log "watch gui window_expired"
-				/bin/rm -f "$STATE_DIR/watcher.pid"
+				enter_ready_window gui "$window_deadline" "$i" "$pending_confirm_polls"
 			fi
 		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
 			clear_watch_state
@@ -415,6 +640,7 @@ watch)
 	;;
 
 preconfirm)
+	dismiss_ready_hud
 	write_file pending_confirm 1
 	play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
 	log "preconfirm queued"
@@ -422,7 +648,7 @@ preconfirm)
 
 confirm)
 	kill_old_watcher
-	restore_window
+	dismiss_ready_hud
 	set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 
 	mode="$(read_file mode)"

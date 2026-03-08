@@ -48,6 +48,8 @@ class DictationHarness:
         self.osa_log = tmp_path / "osascript.log"
         self.kcli_log = tmp_path / "karabiner_cli.log"
         self.afplay_log = tmp_path / "afplay.log"
+        self.hud_log = tmp_path / "hud.log"
+        self.swiftc_log = tmp_path / "swiftc.log"
 
         self._create_db()
         self._write_stub_bins()
@@ -63,6 +65,7 @@ class DictationHarness:
                 "KCLI": str(self.bin_dir / "karabiner_cli"),
                 "OSASCRIPT_BIN": str(self.bin_dir / "osascript"),
                 "AFPLAY_BIN": str(self.bin_dir / "afplay"),
+                "SWIFTC_BIN": str(self.bin_dir / "swiftc"),
                 "PYTHON3_BIN": sys.executable,
                 "WATCH_POLL_INTERVAL": "0.01",
                 "WATCH_MAX_POLLS": "40",
@@ -70,9 +73,9 @@ class DictationHarness:
                 "NO_RECORD_LOG_LABEL": "test-threshold",
                 "STALE_CHECK_EVERY_POLLS": "2",
                 "STALE_SECONDS": "0.01",
-                "CONFIRM_WINDOW": "0.01",
+                "CONFIRM_WINDOW": "0.4",
                 "PRECONFIRM_GRACE_INTERVAL": "0.01",
-                "PRECONFIRM_GRACE_POLLS": "20",
+                "PRECONFIRM_GRACE_POLLS": "4",
                 "DELIVERY_DELAY": "0",
                 "FAKE_FRONT_BUNDLE": "com.google.Chrome",
                 "FAKE_ITERM_WINDOW": "↣ test",
@@ -81,6 +84,8 @@ class DictationHarness:
                 "OSA_LOG_FILE": str(self.osa_log),
                 "KCLI_LOG_FILE": str(self.kcli_log),
                 "AFPLAY_LOG_FILE": str(self.afplay_log),
+                "HUD_LOG_FILE": str(self.hud_log),
+                "SWIFTC_LOG_FILE": str(self.swiftc_log),
                 "FAKE_WIN_POS": "100 200",
             }
         )
@@ -145,6 +150,43 @@ import sys
 log = os.environ["AFPLAY_LOG_FILE"]
 with open(log, "a", encoding="utf-8") as fh:
     fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+""",
+        )
+
+        self._write_executable(
+            "swiftc",
+            f"""#!/usr/bin/env {python}
+import os
+import shlex
+import sys
+import time
+from pathlib import Path
+
+compile_log = os.environ["SWIFTC_LOG_FILE"]
+with open(compile_log, "a", encoding="utf-8") as fh:
+    fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+
+time.sleep(float(os.environ.get("SWIFTC_STUB_SLEEP", "0")))
+
+args = sys.argv[1:]
+output_path = args[args.index("-o") + 1]
+script = Path(output_path)
+script.write_text({repr(textwrap.dedent(f'''#!/usr/bin/env {python}
+import os
+import shlex
+import sys
+import time
+
+log = os.environ["HUD_LOG_FILE"]
+with open(log, "a", encoding="utf-8") as fh:
+    fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+duration = os.environ.get("HUD_STUB_SLEEP")
+if duration is None:
+    visible_args = [arg for arg in sys.argv[1:] if arg != "--warmup"]
+    duration = visible_args[0] if visible_args else "0"
+time.sleep(float(duration))
+'''))}, encoding="utf-8")
+script.chmod(0o755)
 """,
         )
 
@@ -269,6 +311,12 @@ elif args[:2] == ["-l", "JavaScript"]:
 
     def afplay_calls(self):
         return self.read_lines(self.afplay_log)
+
+    def hud_calls(self):
+        return self.read_lines(self.hud_log)
+
+    def swiftc_calls(self):
+        return self.read_lines(self.swiftc_log)
 
 
 class RealTmuxHarness(DictationHarness):

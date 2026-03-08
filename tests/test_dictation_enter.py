@@ -1,7 +1,31 @@
+import subprocess
+import sys
 import threading
 import time
 
 from conftest import iso_timestamp
+
+
+def _is_send_window_hud_call(call):
+    return call.strip() != ""
+
+
+def _visible_send_window_hud_calls(harness):
+    return [call for call in harness.hud_calls() if call.strip() and "--warmup" not in call]
+
+
+def _warmup_hud_calls(harness):
+    return [call for call in harness.hud_calls() if "--warmup" in call]
+
+
+def _wait_for_hud_warmup(harness, timeout=1.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        calls = _warmup_hud_calls(harness)
+        if calls:
+            return calls
+        time.sleep(0.01)
+    return _warmup_hud_calls(harness)
 
 
 def test_save_records_tmux_anchor_and_mode(harness):
@@ -50,12 +74,13 @@ def test_watch_tmux_preconfirm_send_handles_reused_row_update(harness):
 
 def test_watch_gui_logs_still_no_record_then_completes(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.8"
     harness.env["NO_RECORD_LOG_AFTER_POLLS"] = "1"
     harness.env["NO_RECORD_LOG_LABEL"] = "first-poll"
     harness.run("save")
 
     def insert_late_transcript():
-        time.sleep(0.12)
+        time.sleep(0.25)
         harness.insert_history(status="transcript", refined_text="late transcript")
 
     worker = threading.Thread(target=insert_late_transcript)
@@ -70,16 +95,37 @@ def test_watch_gui_logs_still_no_record_then_completes(harness):
     assert "watch gui transcript_detected" in log_text
     assert "watch gui content_settled" in log_text
     assert "watch gui window_expired" in log_text
-    assert any("Tink.aiff" in call for call in harness.afplay_calls())
+    assert harness.afplay_calls() == []
 
 
-def test_watch_gui_uses_configured_sound_and_can_disable_shake(harness):
+def test_watch_gui_late_transcript_still_opens_ready_window(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    def insert_late_transcript():
+        time.sleep(0.26)
+        harness.insert_history(status="transcript", refined_text="late but still sendable")
+
+    worker = threading.Thread(target=insert_late_transcript)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    assert "watch gui transcript_detected" in log_text
+    assert "watch gui content_settled" in log_text
+    assert any('{"dji_watching":0,"dji_ready_to_send":1}' in call for call in harness.kcli_calls())
+
+
+def test_watch_gui_uses_configured_sound_and_can_disable_ready_hud(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
-        DJI_READY_SOUND_NAME="Frog",
         DJI_PRECONFIRM_SOUND_NAME="Sosumi",
-        DJI_ENABLE_WINDOW_SHAKE=0,
+        DJI_ENABLE_READY_HUD=0,
     )
     harness.run("save")
 
@@ -94,17 +140,16 @@ def test_watch_gui_uses_configured_sound_and_can_disable_shake(harness):
     worker.join(timeout=1)
 
     assert proc.returncode == 0, (stdout, stderr)
-    assert any("Frog.aiff" in call for call in harness.afplay_calls())
-    assert not any(call["args"][:2] == ["-l", "JavaScript"] for call in harness.osascript_calls())
+    assert harness.afplay_calls() == []
+    assert harness.hud_calls() == []
 
 
-def test_watch_gui_skips_ready_sound_when_ready_sound_is_disabled(harness):
+def test_watch_gui_ready_feedback_is_visual_only(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
-        DJI_READY_SOUND_NAME="",
         DJI_PRECONFIRM_SOUND_NAME="Sosumi",
-        DJI_ENABLE_WINDOW_SHAKE=1,
+        DJI_ENABLE_READY_HUD=1,
     )
     harness.run("save")
 
@@ -122,13 +167,12 @@ def test_watch_gui_skips_ready_sound_when_ready_sound_is_disabled(harness):
     assert harness.afplay_calls() == []
 
 
-def test_watch_gui_ready_feedback_shakes_when_enabled(harness):
+def test_watch_gui_ready_feedback_shows_send_window_hud_when_enabled(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
-        DJI_READY_SOUND_NAME="Tink",
         DJI_PRECONFIRM_SOUND_NAME="Sosumi",
-        DJI_ENABLE_WINDOW_SHAKE=1,
+        DJI_ENABLE_READY_HUD=1,
     )
     harness.run("save")
 
@@ -143,31 +187,121 @@ def test_watch_gui_ready_feedback_shakes_when_enabled(harness):
     worker.join(timeout=1)
 
     assert proc.returncode == 0, (stdout, stderr)
-    assert any("Tink.aiff" in call for call in harness.afplay_calls())
-    assert any(call["args"][:2] == ["-l", "JavaScript"] for call in harness.osascript_calls())
+    assert harness.afplay_calls() == []
+    assert any(_is_send_window_hud_call(call) for call in _visible_send_window_hud_calls(harness))
+    assert _visible_send_window_hud_calls(harness) == [harness.env["CONFIRM_WINDOW"]]
+    assert harness.swiftc_calls() != []
 
 
-def test_preconfirm_plays_sound_but_does_not_shake(harness):
+def test_save_prepares_ready_hud_before_watch_to_avoid_cold_start_delay(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["SWIFTC_STUB_SLEEP"] = "0.2"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    compile_count_after_save = len(harness.swiftc_calls())
+    hud_source = (harness.state_dir / "send-window-hud.swift").read_text(encoding="utf-8")
+    assert _wait_for_hud_warmup(harness) == ["--warmup"]
+
+    def insert_transcript():
+        time.sleep(0.05)
+        harness.insert_history(status="transcript", refined_text="first message should still show hud")
+
+    worker = threading.Thread(target=insert_transcript)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert compile_count_after_save == 1
+    assert len(harness.swiftc_calls()) == compile_count_after_save
+    assert "Press to send" in hud_source
+    assert "progressFillLayer" in hud_source
+    assert "alpha: 0.25" in hud_source
+    assert any(_is_send_window_hud_call(call) for call in _visible_send_window_hud_calls(harness))
+
+
+def test_watch_uses_prepared_hud_binary_without_requiring_swiftc(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
-        DJI_READY_SOUND_NAME="Tink",
         DJI_PRECONFIRM_SOUND_NAME="Sosumi",
-        DJI_ENABLE_WINDOW_SHAKE=1,
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    compile_count_after_save = len(harness.swiftc_calls())
+    harness.env["SWIFTC_BIN"] = ""
+
+    def insert_transcript():
+        time.sleep(0.05)
+        harness.insert_history(status="transcript", refined_text="prepared binary should show immediately")
+
+    worker = threading.Thread(target=insert_transcript)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert compile_count_after_save == 1
+    assert len(harness.swiftc_calls()) == compile_count_after_save
+    assert _wait_for_hud_warmup(harness) == ["--warmup"]
+    assert any(_is_send_window_hud_call(call) for call in _visible_send_window_hud_calls(harness))
+
+
+def test_watch_rebuilds_hud_when_binary_cache_is_missing(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["SWIFTC_STUB_SLEEP"] = "0"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    compile_count_after_save = len(harness.swiftc_calls())
+    (harness.state_dir / "send-window-hud").unlink()
+
+    def insert_transcript():
+        time.sleep(0.05)
+        harness.insert_history(status="transcript", refined_text="rebuild missing hud binary")
+
+    worker = threading.Thread(target=insert_transcript)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert len(harness.swiftc_calls()) == compile_count_after_save + 1
+    assert any(_is_send_window_hud_call(call) for call in _visible_send_window_hud_calls(harness))
+
+
+def test_preconfirm_plays_sound_but_does_not_show_ready_hud(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
     )
 
     harness.run("preconfirm")
 
     assert any("Sosumi.aiff" in call for call in harness.afplay_calls())
-    assert not any(call["args"][:2] == ["-l", "JavaScript"] for call in harness.osascript_calls())
+    assert harness.hud_calls() == []
 
 
 def test_preconfirm_skips_sound_when_preconfirm_sound_is_disabled(harness):
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
-        DJI_READY_SOUND_NAME="Tink",
         DJI_PRECONFIRM_SOUND_NAME="",
-        DJI_ENABLE_WINDOW_SHAKE=1,
+        DJI_ENABLE_READY_HUD=1,
     )
 
     harness.run("preconfirm")
@@ -195,15 +329,22 @@ def test_watch_tmux_aborts_on_stale_record(harness):
 
 def test_confirm_gui_sends_enter_and_cleans_up(harness):
     harness.write_state("mode", "gui")
-    harness.write_state("win_pos", "10 20")
+    ready_hud = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    harness.write_state("ready_hud.pid", str(ready_hud.pid))
 
-    harness.run("confirm")
+    try:
+        harness.run("confirm")
+        ready_hud.wait(timeout=1)
+    finally:
+        if ready_hud.poll() is None:
+            ready_hud.kill()
+            ready_hud.wait(timeout=1)
 
     log_text = harness.log_text()
     assert "confirm gui send_enter" in log_text
     assert harness.read_state("mode") == ""
+    assert harness.read_state("ready_hud.pid") == ""
     calls = harness.osascript_calls()
-    assert any(call["args"][:2] == ["-l", "JavaScript"] for call in calls)
     assert any(
         "keystroke return" in " ".join(call["args"])
         or "write text" in " ".join(call["args"])
