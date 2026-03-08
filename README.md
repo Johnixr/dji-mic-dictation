@@ -26,8 +26,7 @@ It will handle everything: install Karabiner, copy scripts, merge configs, grant
 
 Buy a DJI Mic Mini wireless microphone. You only need one transmitter + receiver.
 
-<!-- TODO: Add JD.com affiliate link -->
-[Buy on JD.com](https://item.jd.com/TODO)
+[Buy on JD.com](https://u.jd.com/N61cCGv)
 
 10g, clips to your collar, 400m range, active noise cancellation, ~$27 USD.
 

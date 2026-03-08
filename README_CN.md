@@ -24,8 +24,7 @@
 
 ### 第一步：买个 DJI Mic Mini
 
-<!-- TODO: 替换为京东推广链接 -->
-[京东购买](https://item.jd.com/TODO)
+[京东购买](https://u.jd.com/N61cCGv)
 
 10g 重量，夹领口上无感，400 米传输距离，主动降噪，单发射器约 195 元。
 
