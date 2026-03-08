@@ -15,7 +15,8 @@ LOG="${LOG:-$STATE_DIR/debug.log}"
 TMUX_BIN="${TMUX_BIN:-$(command -v tmux 2>/dev/null || echo /opt/homebrew/bin/tmux)}"
 KCLI="${KCLI:-/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli}"
 TYPELESS_DB="${TYPELESS_DB:-$HOME/Library/Application Support/Typeless/typeless.db}"
-CONFIRM_WINDOW="${CONFIRM_WINDOW:-4}"
+CONFIRM_WINDOW="${CONFIRM_WINDOW:-3}"
+WAIT_PHASE_DURATION="${WAIT_PHASE_DURATION:-2}"
 PRECONFIRM_GRACE_INTERVAL="${PRECONFIRM_GRACE_INTERVAL:-0.02}"
 PRECONFIRM_GRACE_POLLS="${PRECONFIRM_GRACE_POLLS:-4}"
 DELIVERY_DELAY="${DELIVERY_DELAY:-0.05}"
@@ -23,6 +24,7 @@ WATCH_POLL_INTERVAL="${WATCH_POLL_INTERVAL:-0.1}"
 WATCH_MAX_POLLS="${WATCH_MAX_POLLS:-300}"
 WATCH_STATE_READY_INTERVAL="${WATCH_STATE_READY_INTERVAL:-0.01}"
 WATCH_STATE_READY_POLLS="${WATCH_STATE_READY_POLLS:-20}"
+SAVE_STATE_READY_POLLS="${SAVE_STATE_READY_POLLS:-300}"
 WATCHER_STOP_INTERVAL="${WATCHER_STOP_INTERVAL:-0.01}"
 WATCHER_STOP_POLLS="${WATCHER_STOP_POLLS:-20}"
 NO_RECORD_LOG_AFTER_POLLS="${NO_RECORD_LOG_AFTER_POLLS:-100}"
@@ -37,6 +39,7 @@ DJI_CONFIG_DIR="${DJI_CONFIG_DIR:-$HOME/.config/dji-mic-dictation}"
 DJI_CONFIG_FILE="${DJI_CONFIG_FILE:-$DJI_CONFIG_DIR/config.env}"
 DJI_ENABLE_AUDIO_FEEDBACK="${DJI_ENABLE_AUDIO_FEEDBACK:-1}"
 DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-ready}"
+DJI_REVIEW_WINDOW_SECONDS="${DJI_REVIEW_WINDOW_SECONDS:-}"
 SOUNDS_DIR="${SOUNDS_DIR:-}"
 if [ -z "$SOUNDS_DIR" ]; then
 	_sd="$(cd "$(dirname "$0")/../sounds" 2>/dev/null && pwd)"
@@ -76,6 +79,18 @@ normalize_sound_name() {
 	esac
 }
 
+normalize_duration_seconds() {
+	local value="${1:-}"
+	local fallback="$2"
+	awk -v value="$value" -v fallback="$fallback" 'BEGIN {
+		if (value ~ /^[0-9]*\.?[0-9]+$/ && value + 0 > 0) {
+			print value
+		} else {
+			print fallback
+		}
+	}'
+}
+
 play_feedback_sound() {
 	local sound_name="$1"
 	[ "$DJI_ENABLE_AUDIO_FEEDBACK" = "1" ] || return 0
@@ -112,7 +127,8 @@ import Foundation
 import Darwin
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-	let duration: TimeInterval
+	let waitDuration: TimeInterval
+	let confirmDuration: TimeInterval
 	let warmup: Bool
 	let daemon: Bool
 	let controlPath: String?
@@ -121,13 +137,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	let height: CGFloat = 34
 	let cornerRadius: CGFloat = 17
 	let fillBleed: CGFloat = 1.0
+	let waitHoldFraction: CGFloat = 0.8
 	var panel: NSPanel?
 	var progressFillLayer: CALayer?
+	var sweepLayer: CAGradientLayer?
 	var hideWorkItem: DispatchWorkItem?
+	var waitPhaseWorkItem: DispatchWorkItem?
 	var signalSource: DispatchSourceSignal?
 
-	init(duration: TimeInterval, warmup: Bool, daemon: Bool, controlPath: String?, readyPath: String?) {
-		self.duration = max(0.1, duration)
+	init(waitDuration: TimeInterval, confirmDuration: TimeInterval, warmup: Bool, daemon: Bool, controlPath: String?, readyPath: String?) {
+		self.waitDuration = max(0, waitDuration)
+		self.confirmDuration = max(0.1, confirmDuration)
 		self.warmup = warmup
 		self.daemon = daemon
 		self.controlPath = controlPath
@@ -153,7 +173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			return
 		}
 
-		showPanel(duration: duration, terminateOnHide: true)
+		let shouldAutoHide = waitDuration <= 0
+		showPanel(waitDuration: waitDuration, confirmDuration: confirmDuration, terminateOnHide: shouldAutoHide)
 	}
 
 	func applicationWillTerminate(_ notification: Notification) {
@@ -184,8 +205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		let parts = command.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
 		switch parts.first {
 		case "show":
-			let requestedDuration = TimeInterval(parts.dropFirst().first ?? "") ?? duration
-			showPanel(duration: requestedDuration, terminateOnHide: false)
+			let requestedWaitDuration = TimeInterval(parts.count > 1 ? parts[1] : "") ?? waitDuration
+			let requestedConfirmDuration = TimeInterval(parts.count > 2 ? parts[2] : "") ?? confirmDuration
+			showPanel(waitDuration: requestedWaitDuration, confirmDuration: requestedConfirmDuration, terminateOnHide: false)
+		case "confirm":
+			let requestedDuration = TimeInterval(parts.count > 1 ? parts[1] : "") ?? confirmDuration
+			startConfirmPhase(duration: requestedDuration, terminateOnHide: false)
 		case "hide":
 			hidePanel()
 		case "stop":
@@ -196,10 +221,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
-	func showPanel(duration: TimeInterval, terminateOnHide: Bool) {
+	func cancelScheduledWork() {
 		hideWorkItem?.cancel()
 		hideWorkItem = nil
+		waitPhaseWorkItem?.cancel()
+		waitPhaseWorkItem = nil
+	}
+
+	func showPanel(waitDuration: TimeInterval, confirmDuration: TimeInterval, terminateOnHide: Bool) {
+		cancelScheduledWork()
 		hidePanel()
+		preparePanel()
+
+		let normalizedWaitDuration = max(0, waitDuration)
+		let normalizedConfirmDuration = max(0.1, confirmDuration)
+		if normalizedWaitDuration <= 0 {
+			guard terminateOnHide else {
+				return
+			}
+			startConfirmPhase(duration: normalizedConfirmDuration, terminateOnHide: true)
+			return
+		}
+
+		startWaitPhase(duration: normalizedWaitDuration)
+		let workItem = DispatchWorkItem { [weak self] in
+			self?.startWaitHoldPhase()
+		}
+		waitPhaseWorkItem = workItem
+		DispatchQueue.main.asyncAfter(deadline: .now() + normalizedWaitDuration, execute: workItem)
+	}
+
+	func preparePanel() {
+		guard panel == nil else {
+			return
+		}
 
 		let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main ?? NSScreen.screens[0]
 
@@ -248,6 +303,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		label.frame = NSRect(x: 0, y: 8, width: width, height: 18)
 		view.addSubview(label)
 
+		let shimmerHost = CALayer()
+		shimmerHost.frame = label.frame
+		shimmerHost.masksToBounds = true
+		let gradientWidth = label.frame.width * 2
+		let shimmerWidth = max(30, label.frame.width * 0.3)
+		let coreWidth = max(10, shimmerWidth / 3)
+		let shimmerHalf = shimmerWidth / gradientWidth / 2
+		let coreHalf = coreWidth / gradientWidth / 2
+
+		let shimmerMask = CATextLayer()
+		shimmerMask.string = NSAttributedString(
+			string: "Press to send",
+			attributes: [
+				.font: NSFont.systemFont(ofSize: 13, weight: .regular),
+				.foregroundColor: NSColor.white,
+			]
+		)
+		shimmerMask.alignmentMode = .center
+		shimmerMask.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+		shimmerMask.frame = shimmerHost.bounds
+		shimmerHost.mask = shimmerMask
+
+		let sweepLayer = CAGradientLayer()
+		sweepLayer.colors = [
+			NSColor(white: 1, alpha: 0).cgColor,
+			NSColor(white: 1, alpha: 0.96).cgColor,
+			NSColor(white: 1, alpha: 0.96).cgColor,
+			NSColor(white: 1, alpha: 0).cgColor,
+		]
+		sweepLayer.locations = [
+			NSNumber(value: Float(0.5 - shimmerHalf)),
+			NSNumber(value: Float(0.5 - coreHalf)),
+			NSNumber(value: Float(0.5 + coreHalf)),
+			NSNumber(value: Float(0.5 + shimmerHalf)),
+		]
+		sweepLayer.startPoint = CGPoint(x: 0, y: 0.5)
+		sweepLayer.endPoint = CGPoint(x: 1, y: 0.5)
+		sweepLayer.frame = NSRect(x: -label.frame.width / 2, y: 0, width: gradientWidth, height: label.frame.height)
+		sweepLayer.opacity = 0
+		shimmerHost.addSublayer(sweepLayer)
+		view.layer?.addSublayer(shimmerHost)
+		self.sweepLayer = sweepLayer
+
 		let visible = screen.visibleFrame
 		panel.setFrameOrigin(NSPoint(
 			x: visible.origin.x + round((visible.size.width - width) / 2),
@@ -255,8 +353,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		))
 		panel.orderFrontRegardless()
 		self.panel = panel
+	}
 
-		startProgressAnimation(duration: duration)
+	func hidePanel() {
+		cancelScheduledWork()
+		progressFillLayer?.removeAllAnimations()
+		sweepLayer?.removeAllAnimations()
+		sweepLayer = nil
+		progressFillLayer = nil
+		panel?.orderOut(nil)
+		panel?.close()
+		panel = nil
+	}
+
+	func progressLayerBounds(width: CGFloat) -> NSRect {
+		NSRect(x: 0, y: 0, width: width, height: height + fillBleed * 2)
+	}
+
+	func currentFillWidth() -> CGFloat {
+		guard let layer = progressFillLayer else {
+			return 0
+		}
+		let sourceLayer = layer.presentation() ?? layer
+		return max(0, min(width + fillBleed, sourceLayer.bounds.size.width))
+	}
+
+	func animateProgress(to fraction: CGFloat, duration: TimeInterval, timingFunctionName: CAMediaTimingFunctionName) {
+		let maxFillWidth = width + fillBleed
+		let fromWidth = currentFillWidth()
+		let targetWidth = max(0, min(1, fraction)) * maxFillWidth
+
+		progressFillLayer?.removeAnimation(forKey: "progress")
+		CATransaction.begin()
+		CATransaction.setDisableActions(true)
+		progressFillLayer?.bounds = progressLayerBounds(width: targetWidth)
+		CATransaction.commit()
+		guard duration > 0 else {
+			return
+		}
+
+		let animation = CABasicAnimation(keyPath: "bounds.size.width")
+		animation.fromValue = fromWidth
+		animation.toValue = targetWidth
+		animation.duration = duration
+		animation.timingFunction = CAMediaTimingFunction(name: timingFunctionName)
+		animation.fillMode = .both
+		animation.isRemovedOnCompletion = false
+		progressFillLayer?.add(animation, forKey: "progress")
+	}
+
+	func startWaitPhase(duration: TimeInterval) {
+		stopSweepAnimation()
+		animateProgress(to: waitHoldFraction, duration: duration, timingFunctionName: .easeIn)
+	}
+
+	func startWaitHoldPhase() {
+		waitPhaseWorkItem?.cancel()
+		waitPhaseWorkItem = nil
+		startSweepAnimation()
+	}
+
+	func startSweepAnimation() {
+		guard let sweepLayer else {
+			return
+		}
+		sweepLayer.removeAllAnimations()
+		sweepLayer.opacity = 1
+
+		let bandWidth = sweepLayer.bounds.width
+		let startX = -bandWidth / 2
+		let endX = width + bandWidth / 2
+		let move = CABasicAnimation(keyPath: "position.x")
+		move.fromValue = startX
+		move.toValue = endX
+		move.duration = 2.1
+		move.timingFunction = CAMediaTimingFunction(name: .easeOut)
+		move.fillMode = .forwards
+		move.isRemovedOnCompletion = false
+
+		CATransaction.begin()
+		CATransaction.setDisableActions(true)
+		sweepLayer.position = CGPoint(x: endX, y: sweepLayer.position.y)
+		CATransaction.commit()
+
+		sweepLayer.add(move, forKey: "sweep-position")
+	}
+
+	func stopSweepAnimation() {
+		sweepLayer?.removeAllAnimations()
+		sweepLayer?.opacity = 0
+	}
+
+	func startConfirmPhase(duration: TimeInterval, terminateOnHide: Bool) {
+		hideWorkItem?.cancel()
+		hideWorkItem = nil
+		preparePanel()
+
+		let normalizedDuration = max(0.1, duration)
+		animateProgress(to: 1, duration: normalizedDuration, timingFunctionName: .linear)
+
 		let workItem = DispatchWorkItem { [weak self] in
 			self?.hidePanel()
 			if terminateOnHide {
@@ -264,41 +459,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			}
 		}
 		hideWorkItem = workItem
-		DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: workItem)
-	}
-
-	func hidePanel() {
-		progressFillLayer?.removeAllAnimations()
-		progressFillLayer = nil
-		panel?.orderOut(nil)
-		panel?.close()
-		panel = nil
-	}
-
-	func startProgressAnimation(duration: TimeInterval) {
-		let maxFillWidth = width + fillBleed
-		CATransaction.begin()
-		CATransaction.setDisableActions(true)
-		progressFillLayer?.bounds = NSRect(x: 0, y: 0, width: maxFillWidth, height: height + fillBleed * 2)
-		CATransaction.commit()
-
-		let animation = CABasicAnimation(keyPath: "bounds.size.width")
-		animation.fromValue = 0
-		animation.toValue = maxFillWidth
-		animation.duration = duration
-		animation.timingFunction = CAMediaTimingFunction(name: .linear)
-		animation.fillMode = .both
-		animation.isRemovedOnCompletion = false
-		progressFillLayer?.add(animation, forKey: "progress")
+		DispatchQueue.main.asyncAfter(deadline: .now() + normalizedDuration, execute: workItem)
 	}
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 var warmup = false
 var daemon = false
-var duration: TimeInterval = 3
+var waitDuration: TimeInterval = 0
+var confirmDuration: TimeInterval = 3
 var controlPath: String?
 var readyPath: String?
+var positionalDurations: [TimeInterval] = []
 
 var index = 0
 while index < arguments.count {
@@ -318,14 +490,21 @@ while index < arguments.count {
 		}
 	default:
 		if let parsedDuration = TimeInterval(argument) {
-			duration = parsedDuration
+			positionalDurations.append(parsedDuration)
 		}
 	}
 	index += 1
 }
 
+if positionalDurations.count >= 2 {
+	waitDuration = positionalDurations[0]
+	confirmDuration = positionalDurations[1]
+} else if let firstDuration = positionalDurations.first {
+	confirmDuration = firstDuration
+}
+
 let app = NSApplication.shared
-let delegate = AppDelegate(duration: duration, warmup: warmup, daemon: daemon, controlPath: controlPath, readyPath: readyPath)
+let delegate = AppDelegate(waitDuration: waitDuration, confirmDuration: confirmDuration, warmup: warmup, daemon: daemon, controlPath: controlPath, readyPath: readyPath)
 app.setActivationPolicy(.accessory)
 app.delegate = delegate
 app.run()
@@ -387,7 +566,15 @@ start_send_window_hud_daemon() {
 	return 0
 }
 
+hud_daemon_needs_restart() {
+	hud_daemon_is_running || return 1
+	[ -x "$HUD_BIN" ] && [ "$HUD_BIN" -nt "$HUD_DAEMON_PID_FILE" ] && return 0
+	[ -f "$HUD_SWIFT_SOURCE" ] && [ "$HUD_SWIFT_SOURCE" -nt "$HUD_DAEMON_PID_FILE" ] && return 0
+	return 1
+}
+
 ensure_send_window_hud_daemon() {
+	hud_daemon_needs_restart && stop_send_window_hud_daemon
 	hud_daemon_is_running && [ -f "$HUD_DAEMON_READY_FILE" ] && return 0
 	start_send_window_hud_daemon
 }
@@ -414,8 +601,9 @@ prepare_send_window_hud_if_enabled() {
 }
 
 show_send_window_hud() {
-	local duration="$1"
-	local expected_session_id="${2:-}"
+	local wait_duration="$1"
+	local confirm_duration="$2"
+	local expected_session_id="${3:-}"
 	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
 		return 0
 	fi
@@ -426,24 +614,52 @@ show_send_window_hud() {
 			return 0
 		}
 	fi
-	if send_hud_daemon_command "show|$duration"; then
+	if send_hud_daemon_command "show|$wait_duration|$confirm_duration"; then
 		write_file ready_hud.pid "$(hud_daemon_pid)"
 		return 0
 	fi
 	stop_send_window_hud_daemon >/dev/null 2>&1 || true
-	"$HUD_BIN" "$duration" >/dev/null 2>&1 &
+	"$HUD_BIN" "$wait_duration" "$confirm_duration" >/dev/null 2>&1 &
 	write_file ready_hud.pid "$!"
 }
 
 show_send_window_hud_if_enabled() {
 	[ "$DJI_ENABLE_READY_HUD" = "1" ] || return 0
-	show_send_window_hud "$1" "$2"
+	show_send_window_hud "$1" "$2" "$3"
+}
+
+confirm_send_window_hud() {
+	local confirm_duration="$1"
+	local expected_session_id="${2:-}"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
+	if [ ! -x "$HUD_BIN" ]; then
+		ensure_send_window_hud_binary || {
+			log "hud confirm skipped: binary_missing"
+			return 0
+		}
+	fi
+	if send_hud_daemon_command "confirm|$confirm_duration"; then
+		write_file ready_hud.pid "$(hud_daemon_pid)"
+		return 0
+	fi
+	dismiss_ready_hud "$expected_session_id"
+	stop_send_window_hud_daemon >/dev/null 2>&1 || true
+	"$HUD_BIN" 0 "$confirm_duration" >/dev/null 2>&1 &
+	write_file ready_hud.pid "$!"
+}
+
+confirm_send_window_hud_if_enabled() {
+	[ "$DJI_ENABLE_READY_HUD" = "1" ] || return 0
+	confirm_send_window_hud "$1" "$2"
 }
 
 load_optional_config
 DJI_ENABLE_AUDIO_FEEDBACK="$(normalize_toggle "$DJI_ENABLE_AUDIO_FEEDBACK" 1)"
 DJI_PRECONFIRM_SOUND_NAME="$(normalize_sound_name "$DJI_PRECONFIRM_SOUND_NAME")"
 DJI_ENABLE_READY_HUD="$(normalize_toggle "$DJI_ENABLE_READY_HUD" 1)"
+CONFIRM_WINDOW="$(normalize_duration_seconds "${DJI_REVIEW_WINDOW_SECONDS:-$CONFIRM_WINDOW}" 3)"
 
 timestamp() {
 	if [ -n "$PYTHON3_BIN" ]; then
@@ -528,6 +744,15 @@ wait_for_state_value() {
 	return 1
 }
 
+wait_for_save_state_value() {
+	local name="$1"
+	local polls="$WATCH_STATE_READY_POLLS"
+	if [ -f "$STATE_DIR/save_in_progress" ]; then
+		polls="$SAVE_STATE_READY_POLLS"
+	fi
+	wait_for_state_value "$name" "$polls" "$WATCH_STATE_READY_INTERVAL"
+}
+
 wait_for_process_exit() {
 	local pid="$1"
 	local polls="${2:-$WATCHER_STOP_POLLS}"
@@ -561,7 +786,7 @@ cleanup() {
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
-	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,window_deadline}
+	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,window_deadline,save_in_progress}
 }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
@@ -620,28 +845,37 @@ sleep_until_deadline() {
 open_send_window() {
 	local log_label="$1"
 	local expected_session_id="${2:-}"
-	local deadline
 	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
 		return 0
 	fi
-	show_send_window_hud_if_enabled "$CONFIRM_WINDOW" "$expected_session_id"
-	deadline="$(window_deadline_timestamp "$CONFIRM_WINDOW")"
-	write_file window_deadline "$deadline"
-	log "${log_label} send_window_started window=${CONFIRM_WINDOW}s deadline=${deadline}"
-	printf '%s' "$deadline"
+	show_send_window_hud_if_enabled "$WAIT_PHASE_DURATION" "$CONFIRM_WINDOW" "$expected_session_id"
+	log "${log_label} send_window_started wait=${WAIT_PHASE_DURATION}s confirm=${CONFIRM_WINDOW}s"
 }
 
 reuse_or_open_send_window() {
 	local log_label="$1"
 	local expected_session_id="${2:-}"
-	local deadline
-	deadline="$(read_file window_deadline)"
-	if [ -n "$deadline" ] && deadline_has_remaining "$deadline"; then
-		log "${log_label} send_window_reused window=${CONFIRM_WINDOW}s deadline=${deadline}"
-		printf '%s' "$deadline"
+	local ready_pid
+	ready_pid="$(read_file ready_hud.pid)"
+	if [ -n "$ready_pid" ] && /bin/kill -0 "$ready_pid" 2>/dev/null; then
+		log "${log_label} send_window_reused wait=${WAIT_PHASE_DURATION}s confirm=${CONFIRM_WINDOW}s"
 		return 0
 	fi
 	open_send_window "$log_label" "$expected_session_id"
+}
+
+start_confirm_window() {
+	local log_label="$1"
+	local expected_session_id="${2:-}"
+	local deadline
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
+	confirm_send_window_hud_if_enabled "$CONFIRM_WINDOW" "$expected_session_id"
+	deadline="$(window_deadline_timestamp "$CONFIRM_WINDOW")"
+	write_file window_deadline "$deadline"
+	log "${log_label} confirm_window_started window=${CONFIRM_WINDOW}s deadline=${deadline}"
+	printf '%s' "$deadline"
 }
 
 expire_send_window() {
@@ -662,20 +896,22 @@ expire_send_window() {
 
 enter_ready_window() {
 	local mode="$1"
-	local deadline="$2"
-	local polls="$3"
-	local grace_polls="${4:-0}"
-	local expected_session_id="${5:-}"
+	local polls="$2"
+	local grace_polls="${3:-0}"
+	local expected_session_id="${4:-}"
+	local deadline
 	local remaining_window
 	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
 		return 0
 	fi
+	set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
+	deadline="$(start_confirm_window "watch ${mode}" "$expected_session_id")"
 	remaining_window="$(remaining_deadline_seconds "$deadline")"
 	if ! awk -v remaining="$remaining_window" 'BEGIN { exit !(remaining > 0) }'; then
+		set_vars '{"dji_ready_to_send":0}'
 		expire_send_window "$mode" 0 "$expected_session_id"
 		return
 	fi
-	set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
 	log "watch ${mode} content_settled (${polls} polls ~$((polls / 10))s grace_polls=${grace_polls}) remaining=${remaining_window}s"
 	sleep_until_deadline "$deadline"
 	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
@@ -796,6 +1032,7 @@ save)
 	kill_old_watcher
 	set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 	cleanup
+	write_file save_in_progress 1
 	save_ts="$(utc_timestamp_ms)"
 	[ -n "$save_ts" ] || save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 	anchor_rowid="$(typeless_last_rowid)"
@@ -803,10 +1040,6 @@ save)
 	anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
 	session_id="$(generate_session_id)"
 	[ -n "$session_id" ] || session_id="$$-$(/bin/date +%s)"
-	write_file save_ts "$save_ts"
-	write_file db_anchor_rowid "$anchor_rowid"
-	write_file db_anchor_updated_at "$anchor_updated_at"
-	write_file session_id "$session_id"
 
 	front_bundle="$("$OSASCRIPT_BIN" -e \
 		'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
@@ -825,28 +1058,36 @@ save)
 	esac
 
 	if [ -n "$pane" ]; then
-		write_file mode tmux
-		write_file pane_id "$pane"
 		log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
 	else
-		write_file mode gui
 		log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
 	fi
 	prepare_send_window_hud_if_enabled
+	write_file save_ts "$save_ts"
+	write_file db_anchor_rowid "$anchor_rowid"
+	write_file db_anchor_updated_at "$anchor_updated_at"
+	if [ -n "$pane" ]; then
+		write_file mode tmux
+		write_file pane_id "$pane"
+	else
+		write_file mode gui
+	fi
+	write_file session_id "$session_id"
+	/bin/rm -f "$STATE_DIR/save_in_progress"
 	;;
 
 watch)
 	kill_old_watcher
 	set_vars '{"dji_ready_to_send":0}'
-	watch_session_id="$(wait_for_state_value session_id)"
+	watch_session_id="$(wait_for_save_state_value session_id)"
 	trap 'clear_watch_state "$watch_session_id"' EXIT
 	trap 'clear_watch_state "$watch_session_id"; exit 0' TERM INT
 
-	mode="$(wait_for_state_value mode)"
+	mode="$(wait_for_save_state_value mode)"
 	write_file watcher.pid "$$"
 
 	if [ "$mode" = "tmux" ]; then
-		pane="$(wait_for_state_value pane_id)"
+		pane="$(wait_for_save_state_value pane_id)"
 		[ -n "$pane" ] || {
 			cleanup "$watch_session_id"
 			exit 0
@@ -856,7 +1097,7 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		window_deadline="$(reuse_or_open_send_window "watch tmux" "$watch_session_id")"
+		reuse_or_open_send_window "watch tmux" "$watch_session_id"
 
 		changed=0 i=0 done_status="" has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
@@ -882,32 +1123,20 @@ watch)
 					exit 0
 				fi
 			fi
-			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window tmux 0 "$watch_session_id"
-				exit 0
-			fi
 		done
 
 		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
 			session_is_current "$watch_session_id" || exit 0
-			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window tmux 0 "$watch_session_id"
-				exit 0
-			fi
 			log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then
 				session_is_current "$watch_session_id" || exit 0
-				if ! deadline_has_remaining "$window_deadline"; then
-					expire_send_window tmux 0 "$watch_session_id"
-					exit 0
-				fi
 				/bin/sleep "$DELIVERY_DELAY"
 				$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
 				clear_watch_state "$watch_session_id"
 				log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
 				cleanup "$watch_session_id"
 			else
-				enter_ready_window tmux "$window_deadline" "$i" "$pending_confirm_polls" "$watch_session_id"
+				enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
 			fi
 		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
 			clear_watch_state "$watch_session_id"
@@ -925,7 +1154,7 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=gui save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		window_deadline="$(reuse_or_open_send_window "watch gui" "$watch_session_id")"
+		reuse_or_open_send_window "watch gui" "$watch_session_id"
 
 		changed=0 i=0 has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
@@ -951,32 +1180,20 @@ watch)
 					exit 0
 				fi
 			fi
-			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window gui 0 "$watch_session_id"
-				exit 0
-			fi
 		done
 
 		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
 			session_is_current "$watch_session_id" || exit 0
-			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window gui 0 "$watch_session_id"
-				exit 0
-			fi
 			log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then
 				session_is_current "$watch_session_id" || exit 0
-				if ! deadline_has_remaining "$window_deadline"; then
-					expire_send_window gui 0 "$watch_session_id"
-					exit 0
-				fi
 				/bin/sleep "$DELIVERY_DELAY"
 				gui_send_enter
 				clear_watch_state "$watch_session_id"
 				log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
 				cleanup "$watch_session_id"
 			else
-				enter_ready_window gui "$window_deadline" "$i" "$pending_confirm_polls" "$watch_session_id"
+				enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
 			fi
 		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
 			clear_watch_state "$watch_session_id"
@@ -996,7 +1213,7 @@ watch)
 open-window)
 	open_window_session_id="$(current_session_id)"
 	if [ -z "$open_window_session_id" ]; then
-		open_window_session_id="$(wait_for_state_value session_id)"
+		open_window_session_id="$(wait_for_save_state_value session_id)"
 	fi
 	[ -n "$open_window_session_id" ] || exit 0
 	reuse_or_open_send_window open_window "$open_window_session_id" >/dev/null
@@ -1007,6 +1224,7 @@ preconfirm)
 	if transcript_ready_since_save; then
 		kill_old_watcher
 		set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
+		play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
 		send_current_mode_enter preconfirm
 		cleanup
 	else
