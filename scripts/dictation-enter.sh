@@ -36,7 +36,12 @@ SWIFTC_BIN="${SWIFTC_BIN:-$(command -v swiftc 2>/dev/null)}"
 DJI_CONFIG_DIR="${DJI_CONFIG_DIR:-$HOME/.config/dji-mic-dictation}"
 DJI_CONFIG_FILE="${DJI_CONFIG_FILE:-$DJI_CONFIG_DIR/config.env}"
 DJI_ENABLE_AUDIO_FEEDBACK="${DJI_ENABLE_AUDIO_FEEDBACK:-1}"
-DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-Sosumi}"
+DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-ready}"
+SOUNDS_DIR="${SOUNDS_DIR:-}"
+if [ -z "$SOUNDS_DIR" ]; then
+	_sd="$(cd "$(dirname "$0")/../sounds" 2>/dev/null && pwd)"
+	[ -d "$_sd" ] && SOUNDS_DIR="$_sd" || SOUNDS_DIR="$HOME/.config/dji-mic-dictation/sounds"
+fi
 DJI_ENABLE_READY_HUD="${DJI_ENABLE_READY_HUD:-1}"
 HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$STATE_DIR/send-window-hud.swift}"
 HUD_BIN="${HUD_BIN:-$STATE_DIR/send-window-hud}"
@@ -75,7 +80,11 @@ play_feedback_sound() {
 	local sound_name="$1"
 	[ "$DJI_ENABLE_AUDIO_FEEDBACK" = "1" ] || return 0
 	[ -n "$sound_name" ] || return 0
-	"$AFPLAY_BIN" -v 0.3 "/System/Library/Sounds/${sound_name}.aiff" &
+	if [ -n "$SOUNDS_DIR" ] && [ -f "$SOUNDS_DIR/${sound_name}.wav" ]; then
+		"$AFPLAY_BIN" -v 0.6 "$SOUNDS_DIR/${sound_name}.wav" &
+	elif [ -f "/System/Library/Sounds/${sound_name}.aiff" ]; then
+		"$AFPLAY_BIN" -v 0.3 "/System/Library/Sounds/${sound_name}.aiff" &
+	fi
 }
 
 dismiss_ready_hud() {
