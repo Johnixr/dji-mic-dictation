@@ -41,6 +41,7 @@ class DictationHarness:
         self.db_path = tmp_path / "typeless.db"
         self.home_dir = tmp_path / "home"
         self.home_dir.mkdir()
+        self.config_dir = self.home_dir / ".config" / "dji-mic-dictation"
         self.bin_dir = tmp_path / "bin"
         self.bin_dir.mkdir()
         self.tmux_log = tmp_path / "tmux.log"
@@ -245,6 +246,11 @@ elif args[:2] == ["-l", "JavaScript"]:
 
     def write_state(self, name, value):
         (self.state_dir / name).write_text(value, encoding="utf-8")
+
+    def write_app_config(self, **entries):
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        lines = [f"{key}={value}" for key, value in entries.items()]
+        (self.config_dir / "config.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def log_text(self):
         return self.log_file.read_text(encoding="utf-8") if self.log_file.exists() else ""

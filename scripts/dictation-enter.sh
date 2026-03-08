@@ -28,8 +28,55 @@ STALE_SECONDS="${STALE_SECONDS:-5}"
 PYTHON3_BIN="${PYTHON3_BIN:-$(command -v python3 2>/dev/null)}"
 OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
 AFPLAY_BIN="${AFPLAY_BIN:-/usr/bin/afplay}"
+DJI_CONFIG_DIR="${DJI_CONFIG_DIR:-$HOME/.config/dji-mic-dictation}"
+DJI_CONFIG_FILE="${DJI_CONFIG_FILE:-$DJI_CONFIG_DIR/config.env}"
+DJI_ENABLE_AUDIO_FEEDBACK="${DJI_ENABLE_AUDIO_FEEDBACK:-1}"
+DJI_READY_SOUND_NAME="${DJI_READY_SOUND_NAME:-Tink}"
+DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-Sosumi}"
+DJI_ENABLE_WINDOW_SHAKE="${DJI_ENABLE_WINDOW_SHAKE:-1}"
 
 /bin/mkdir -p "$STATE_DIR"
+
+load_optional_config() {
+	[ -f "$DJI_CONFIG_FILE" ] || return 0
+	# shellcheck disable=SC1090
+	. "$DJI_CONFIG_FILE"
+}
+
+normalize_toggle() {
+	case "${1:-}" in
+	1 | true | TRUE | yes | YES | on | ON) echo 1 ;;
+	0 | false | FALSE | no | NO | off | OFF) echo 0 ;;
+	*) echo "$2" ;;
+	esac
+}
+
+normalize_sound_name() {
+	case "${1:-}" in
+	'' | off | OFF | none | NONE) echo '' ;;
+	*.aiff) echo "${1%.aiff}" ;;
+	*.AIFF) echo "${1%.AIFF}" ;;
+	*) echo "$1" ;;
+	esac
+}
+
+play_feedback_sound() {
+	local sound_name="$1"
+	[ "$DJI_ENABLE_AUDIO_FEEDBACK" = "1" ] || return 0
+	[ -n "$sound_name" ] || return 0
+	"$AFPLAY_BIN" "/System/Library/Sounds/${sound_name}.aiff" &
+}
+
+shake_window_if_enabled() {
+	[ "$DJI_ENABLE_WINDOW_SHAKE" = "1" ] || return 0
+	shake_window
+}
+
+load_optional_config
+DJI_ENABLE_AUDIO_FEEDBACK="$(normalize_toggle "$DJI_ENABLE_AUDIO_FEEDBACK" 1)"
+DJI_READY_SOUND_NAME="$(normalize_sound_name "$DJI_READY_SOUND_NAME")"
+DJI_PRECONFIRM_SOUND_NAME="$(normalize_sound_name "$DJI_PRECONFIRM_SOUND_NAME")"
+DJI_ENABLE_WINDOW_SHAKE="$(normalize_toggle "$DJI_ENABLE_WINDOW_SHAKE" 1)"
 
 timestamp() {
 	if [ -n "$PYTHON3_BIN" ]; then
@@ -285,8 +332,8 @@ watch)
 				cleanup
 			else
 				set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
-				"$AFPLAY_BIN" /System/Library/Sounds/Tink.aiff &
-				shake_window
+				play_feedback_sound "$DJI_READY_SOUND_NAME"
+				shake_window_if_enabled
 				log "watch tmux content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
 				/bin/sleep "$CONFIRM_WINDOW"
 				set_vars '{"dji_ready_to_send":0}'
@@ -344,8 +391,8 @@ watch)
 				cleanup
 			else
 				set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
-				"$AFPLAY_BIN" /System/Library/Sounds/Tink.aiff &
-				shake_window
+				play_feedback_sound "$DJI_READY_SOUND_NAME"
+				shake_window_if_enabled
 				log "watch gui content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
 				/bin/sleep "$CONFIRM_WINDOW"
 				set_vars '{"dji_ready_to_send":0}'
@@ -369,7 +416,7 @@ watch)
 
 preconfirm)
 	write_file pending_confirm 1
-	"$AFPLAY_BIN" /System/Library/Sounds/Sosumi.aiff &
+	play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
 	log "preconfirm queued"
 	;;
 

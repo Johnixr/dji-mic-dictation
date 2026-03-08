@@ -1,55 +1,69 @@
 # DJI Mic Mini 语音听写
 
-把 DJI Mic Mini 变成 macOS 无线听写遥控器。按一下胸口的按钮开始听写，再按一下停止，第三下发送——全程不碰键盘。
+这是一个以键盘工作流为核心的 macOS 听写/发送方案。`Fn` 是一等触发器；如果你有 DJI Mic Mini，也可以把它的硬件按钮作为可选触发器，映射到同一套流程。
 
 适用于任何接受文字输入的 App：Claude Code、微信、飞书、Telegram、Slack、VS Code、备忘录等。如果发现不兼容的软件，欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) 或提交 PR！
 
 [English](README.md)
 
-## 不要手动安装
+## 用 CLI 安装
 
-别去翻配置文件，别去一步步手动设置。
+直接运行安装器：
 
-**复制下面这段指令，粘贴给你的 AI 编程助手：**
-
-```
-帮我配置 DJI Mic Mini 语音听写，项目在 https://github.com/Johnixr/dji-mic-dictation
+```bash
+npx github:Johnixr/dji-mic-dictation install
 ```
 
-它会自动完成所有事：安装 Karabiner、复制脚本、合并配置、授权权限。
+安装器会自动检查是否接了 DJI Mic Mini：
 
-> 适用于 Claude Code、Codex、Cursor、Windsurf，或任何能读取 URL 的 AI 编程助手。
+- 如果检测到了，就会在 keyboard workflow 之上自动启用可选的硬件触发器
+- 如果没检测到，就默认安装 keyboard workflow，并在交互式安装时询问你是否要顺手把可选 DJI 触发器也预配置好
+
+常用后续命令：
+
+```bash
+npx github:Johnixr/dji-mic-dictation update
+npx github:Johnixr/dji-mic-dictation doctor
+npx github:Johnixr/dji-mic-dictation config
+npx github:Johnixr/dji-mic-dictation uninstall
+```
+
+默认走 CLI。AI 助手如果要帮你配置，也应该调用这套 CLI，而不是自己重新拼安装步骤。
 
 ## 三步上手
 
-### 第一步：买个 DJI Mic Mini
-
-[京东购买](https://u.jd.com/N61cCGv)
-
-10g 重量，夹领口上无感，400 米传输距离，主动降噪，单发射器约 195 元。
-
-### 第二步：装 Typeless（推荐）
+### 第一步：装 Typeless（当前版本必需）
 
 [Typeless](https://www.typeless.com/?via=john-yin) 在 macOS 听写之上加了一层 LLM 智能编辑，自动去除口头禅、修正口误、整理格式，中英文混合也能搞定。
 
 免费版每周 4000 字，Pro 版 $12/月。
 
-### 第三步：把指令粘贴给你的 AI
+### 第二步：决定是否启用可选硬件触发器
 
-复制上面的指令，粘贴到 Claude Code 或你常用的 AI 助手里，搞定。
+你完全可以只用键盘工作流。如果你有 DJI Mic Mini，也可以把它启用成一个可选硬件触发器，映射到同一套 `Fn` 工作流。
+
+[京东购买 DJI Mic Mini](https://u.jd.com/N61cCGv)
+
+10g 重量，夹领口上无感，400 米传输距离，主动降噪，单发射器约 195 元。
+
+### 第三步：运行安装器
+
+```bash
+npx github:Johnixr/dji-mic-dictation install
+```
 
 ## 工作原理
 
 ```
-按 1 下 → Fn（开始听写）→ 随便说多久
-按 2 下 → Fn（结束听写）→ 轮询检测文字输入
-         → 文字上屏 → "Tink" 提示音 + 窗口震动 = 发送窗口打开
-按 3 下 → Enter（发送到当前 App）→ AI 开始干活
+Fn 第 1 下 → 开始听写 → 随便说多久
+Fn 第 2 下 → 结束听写 → 轮询检测文字输入
+         → 文字上屏 → 提示音 + 窗口震动 = 发送窗口打开
+Fn 第 3 下 → 发送 / Enter 到当前 App → AI 开始干活
 
 没按？ → 3 秒后自动重置，无副作用
 ```
 
-一个物理按钮，三种虚拟动作，自适应文字检测驱动。
+如果在安装时启用了 DJI 触发器，那么 Mic Mini 按钮会镜像这套同样的流程。
 
 ## 前置条件
 
@@ -57,11 +71,27 @@
 |------|------|
 | macOS | 已在 macOS Sequoia 上验证 |
 | [Karabiner-Elements](https://karabiner-elements.pqrs.org/) | `brew install --cask karabiner-elements` |
-| DJI Mic Mini | vendor_id: 11427, product_id: 16401 |
+| DJI Mic Mini | 可选硬件触发器；vendor_id: 11427, product_id: 16401 |
 | macOS 听写 | 系统设置 → 键盘 → 听写 → 开启 |
-| [Typeless](https://www.typeless.com/?via=john-yin) | 可选，但强烈推荐 |
+| [Typeless](https://www.typeless.com/?via=john-yin) | 当前版本必需，因为检测依赖 Typeless DB |
 
-## 用的是其他麦克风？
+## 仓库里有什么
+
+```
+dji-mic-dictation/
+├── cli/                           # CLI 安装 / update / doctor / config / uninstall
+├── README.md                      # 英文文档
+├── README_CN.md                   # 你正在看的中文文档
+├── CLAUDE.md                      # 给 AI 助手看的说明
+├── AGENTS.md                      # 给 Codex 的软链
+├── package.json                   # npm bin 入口
+├── scripts/
+│   └── dictation-enter.sh         # 主脚本
+└── karabiner/
+    └── dji-mic-mini.json          # Karabiner 规则模板
+```
+
+## 用的是其他外部触发器？
 
 查你设备的 vendor_id 和 product_id：
 
@@ -69,7 +99,7 @@
 '/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli' --list-connected-devices
 ```
 
-然后告诉你的 AI 助手用你的设备 ID 更新配置。
+然后更新受管设备 ID，并用 `--trigger-mode keyboard+dji` 重新安装。
 
 ## 问题排查
 
@@ -83,12 +113,13 @@ cat /tmp/dji-dictation/debug.log
 
 | 现象 | 可能原因 | 解决方法 |
 |------|---------|---------|
-| 按按钮没反应 | Karabiner 看不到设备 | 系统设置 → 隐私与安全 → 输入监控，给 Karabiner 授权 |
-| 按按钮只调音量 | 设备未在 Karabiner 中配置 | 确认 karabiner.json 的 devices 里有 `"is_consumer": true, "ignore": false` |
+| 可选硬件按钮没反应 | Karabiner 看不到设备 | 系统设置 → 隐私与安全 → 输入监控，给 Karabiner 授权 |
+| 可选硬件按钮只调音量 | 安装时没有检测到设备，所以只配置了 keyboard workflow | 把 DJI 接收器插上后重新执行 `npx github:Johnixr/dji-mic-dictation install` |
 | 听写正常但没有提示音/窗口不抖 | 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 `/usr/bin/osascript` 或终端 App 授权 |
 | 有提示音但窗口不抖 | App 有非标准窗口（如 Electron 水印层） | 飞书已适配；其他 App 欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
-| 日志一直显示 `baseline=-1` | pyobjc 未安装或 python 路径错误 | 执行 `pip install pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices`，更新脚本中的 `PYTHON3=` 路径 |
+| CLI 提示找不到 Typeless DB | Typeless 没安装或还没打开过 | 安装 Typeless，至少打开一次，再重新执行 `npx github:Johnixr/dji-mic-dictation install` 或 `npx github:Johnixr/dji-mic-dictation doctor` |
 | 窗口抖了但 Enter 没发出去 | 终端 App 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 iTerm2 / Terminal.app 授权 |
+| 发送逻辑不对或者还是旧脚本 | 已安装版本太旧 | 拉最新仓库后执行 `npx github:Johnixr/dji-mic-dictation update` |
 
 ### 权限清单
 

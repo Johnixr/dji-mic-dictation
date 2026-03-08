@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
+NPM_BIN="${NPM_BIN:-$(command -v npm 2>/dev/null || true)}"
 MODE="${1:-all}"
 
 if [ -z "$PYTHON_BIN" ]; then
@@ -12,10 +13,28 @@ fi
 
 cd "$REPO_ROOT"
 
+ensure_npm() {
+	if [ ! -f package.json ]; then
+		return 0
+	fi
+	if [ -z "$NPM_BIN" ]; then
+		echo "npm not found" >&2
+		exit 1
+	fi
+	if [ ! -d node_modules ]; then
+		echo "node_modules not found. Install dependencies with: $NPM_BIN install" >&2
+		exit 1
+	fi
+}
+
 run_lint() {
 	bash -n scripts/dictation-enter.sh
 	shfmt -d scripts/*.sh
 	shellcheck scripts/*.sh
+	ensure_npm
+	if [ -f package.json ]; then
+		"$NPM_BIN" run lint --silent
+	fi
 }
 
 ensure_pytest() {
@@ -26,6 +45,10 @@ ensure_pytest() {
 }
 
 run_test() {
+	ensure_npm
+	if [ -f package.json ]; then
+		"$NPM_BIN" run test:node --silent
+	fi
 	ensure_pytest
 	"$PYTHON_BIN" -m pytest -q -m "not smoke"
 }
