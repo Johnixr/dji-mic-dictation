@@ -50,6 +50,21 @@ function createCommandError(message, code) {
 	return error;
 }
 
+async function assertInstallationPrerequisites(runtime) {
+	if (!(await pathExists(runtime.typelessDbPath))) {
+		throw createCommandError(
+			`Typeless DB not found at ${runtime.typelessDbPath}. Install/open Typeless first.`,
+			'TYPELESS_DB_MISSING',
+		);
+	}
+	if (!(await pathExists(runtime.karabinerConfigPath))) {
+		throw createCommandError(
+			`Karabiner config not found at ${runtime.karabinerConfigPath}. Open Karabiner-Elements once first.`,
+			'KARABINER_CONFIG_MISSING',
+		);
+	}
+}
+
 export async function readManifest(runtime) {
 	try {
 		return JSON.parse(await fs.readFile(runtime.manifestFilePath, 'utf-8'));
@@ -284,18 +299,7 @@ export async function getKarabinerProfiles(runtime) {
 }
 
 export async function install(runtime, options = {}) {
-	if (!(await pathExists(runtime.typelessDbPath))) {
-		throw createCommandError(
-			`Typeless DB not found at ${runtime.typelessDbPath}. Install/open Typeless first.`,
-			'TYPELESS_DB_MISSING',
-		);
-	}
-	if (!(await pathExists(runtime.karabinerConfigPath))) {
-		throw createCommandError(
-			`Karabiner config not found at ${runtime.karabinerConfigPath}. Open Karabiner-Elements once first.`,
-			'KARABINER_CONFIG_MISSING',
-		);
-	}
+	await assertInstallationPrerequisites(runtime);
 
 	return syncInstallation(runtime, {
 		profileOptions: await resolveInstallProfileOptions(runtime, options),
@@ -306,6 +310,8 @@ export async function install(runtime, options = {}) {
 }
 
 export async function update(runtime, options = {}) {
+	await assertInstallationPrerequisites(runtime);
+
 	const manifest = await readManifest(runtime);
 	const templateRule = await loadRuleTemplate(runtime);
 	const karabinerConfig = await loadKarabinerConfig(runtime);

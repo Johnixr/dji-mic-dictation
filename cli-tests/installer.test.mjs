@@ -9,10 +9,16 @@ import { promisify } from 'node:util';
 import { doctor, install, uninstall, update } from '../cli/lib/actions.mjs';
 import { loadConfig } from '../cli/lib/config.mjs';
 import { buildInstallProfilePromptPlan } from '../cli/lib/install-profile-plan.mjs';
+import { MANAGED_DEVICE } from '../cli/lib/karabiner.mjs';
 import { createRuntime } from '../cli/lib/runtime.mjs';
 import { listSystemSounds } from '../cli/lib/sounds.mjs';
 
 const execFileAsync = promisify(execFile);
+const MANAGED_SCRIPT_COMMAND_PATH = '~/.config/karabiner/scripts/dictation-enter.sh';
+
+function ruleUsesManagedScript(rule) {
+	return JSON.stringify(rule).includes(MANAGED_SCRIPT_COMMAND_PATH);
+}
 
 async function writeExecutable(filePath, content) {
 	await fs.writeFile(filePath, content, 'utf-8');
@@ -275,6 +281,63 @@ test('update refreshes manifest version and preserves config', async () => {
 
 	const karabinerConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
 	assert.equal(karabinerConfig.profiles.length, 3);
+});
+
+test('update reconciles legacy managed rules even without a manifest', async () => {
+	const fixture = await createFixture();
+	const template = JSON.parse(await fs.readFile(fixture.runtime.karabinerTemplatePath, 'utf-8'));
+	const legacyRule = structuredClone(template.rules[0]);
+	legacyRule.description = 'Legacy Fn dictation workflow';
+
+	const karabinerConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
+	const primaryProfile = karabinerConfig.profiles.find((profile) => profile.name === 'Primary');
+	primaryProfile.complex_modifications.rules.push(legacyRule);
+	primaryProfile.devices.push(structuredClone(MANAGED_DEVICE));
+	await fs.writeFile(fixture.karabinerConfigPath, `${JSON.stringify(karabinerConfig, null, 2)}\n`, 'utf-8');
+
+	const result = await update(fixture.runtime);
+	assert.equal(result.profileName, 'Primary');
+	assert.equal(result.triggerMode, 'keyboard+dji');
+
+	const updatedConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
+	const updatedPrimaryProfile = updatedConfig.profiles.find((profile) => profile.name === 'Primary');
+	assert.equal(updatedPrimaryProfile.complex_modifications.rules.filter(ruleUsesManagedScript).length, 1);
+	assert(
+		updatedPrimaryProfile.complex_modifications.rules.some(
+			(rule) => rule.description === 'Fn dictation toggle + confirm/preconfirm to send Enter',
+		),
+	);
+	assert(
+		!updatedPrimaryProfile.complex_modifications.rules.some((rule) => rule.description === 'Legacy Fn dictation workflow'),
+	);
+});
+
+test('update throws TYPELESS_DB_MISSING when Typeless DB is absent', async () => {
+	const fixture = await createFixture();
+	await install(fixture.runtime, {});
+	await fs.rm(fixture.runtime.typelessDbPath);
+
+	await assert.rejects(
+		() => update(fixture.runtime),
+		(error) => {
+			assert.equal(error.code, 'TYPELESS_DB_MISSING');
+			return true;
+		},
+	);
+});
+
+test('update throws KARABINER_CONFIG_MISSING when Karabiner config is absent', async () => {
+	const fixture = await createFixture();
+	await install(fixture.runtime, {});
+	await fs.rm(fixture.karabinerConfigPath);
+
+	await assert.rejects(
+		() => update(fixture.runtime),
+		(error) => {
+			assert.equal(error.code, 'KARABINER_CONFIG_MISSING');
+			return true;
+		},
+	);
 });
 
 test('install throws KARABINER_CONFIG_MISSING when Karabiner config is absent', async () => {

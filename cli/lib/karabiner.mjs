@@ -12,6 +12,8 @@ export const MANAGED_DEVICE = Object.freeze({
 	ignore: false,
 });
 
+const MANAGED_SCRIPT_COMMAND_PATH = '~/.config/karabiner/scripts/dictation-enter.sh';
+
 function sortValue(value) {
 	if (Array.isArray(value)) {
 		return value.map(sortValue);
@@ -42,8 +44,21 @@ function matchManagedDevice(device) {
 	);
 }
 
+function valueContainsManagedScriptCommand(value) {
+	if (Array.isArray(value)) {
+		return value.some((item) => valueContainsManagedScriptCommand(item));
+	}
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	if (typeof value.shell_command === 'string' && value.shell_command.includes(MANAGED_SCRIPT_COMMAND_PATH)) {
+		return true;
+	}
+	return Object.values(value).some((item) => valueContainsManagedScriptCommand(item));
+}
+
 function matchManagedRule(rule, templateRule) {
-	return rule?.description === templateRule.description;
+	return rule?.description === templateRule.description || valueContainsManagedScriptCommand(rule);
 }
 
 function isDjiManipulator(manipulator) {
