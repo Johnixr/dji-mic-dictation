@@ -21,6 +21,10 @@ PRECONFIRM_GRACE_POLLS="${PRECONFIRM_GRACE_POLLS:-4}"
 DELIVERY_DELAY="${DELIVERY_DELAY:-0.05}"
 WATCH_POLL_INTERVAL="${WATCH_POLL_INTERVAL:-0.1}"
 WATCH_MAX_POLLS="${WATCH_MAX_POLLS:-300}"
+WATCH_STATE_READY_INTERVAL="${WATCH_STATE_READY_INTERVAL:-0.01}"
+WATCH_STATE_READY_POLLS="${WATCH_STATE_READY_POLLS:-20}"
+WATCHER_STOP_INTERVAL="${WATCHER_STOP_INTERVAL:-0.01}"
+WATCHER_STOP_POLLS="${WATCHER_STOP_POLLS:-20}"
 NO_RECORD_LOG_AFTER_POLLS="${NO_RECORD_LOG_AFTER_POLLS:-100}"
 NO_RECORD_LOG_LABEL="${NO_RECORD_LOG_LABEL:-10s}"
 STALE_CHECK_EVERY_POLLS="${STALE_CHECK_EVERY_POLLS:-50}"
@@ -70,7 +74,11 @@ play_feedback_sound() {
 }
 
 dismiss_ready_hud() {
+	local expected_session_id="${1:-}"
 	local pid
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
 	pid="$(read_file ready_hud.pid)"
 	[ -n "$pid" ] && /bin/kill "$pid" 2>/dev/null
 	/bin/rm -f "$STATE_DIR/ready_hud.pid"
@@ -235,7 +243,11 @@ prepare_send_window_hud_if_enabled() {
 
 show_send_window_hud() {
 	local duration="$1"
-	dismiss_ready_hud
+	local expected_session_id="${2:-}"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
+	dismiss_ready_hud "$expected_session_id"
 	if [ ! -x "$HUD_BIN" ]; then
 		ensure_send_window_hud_binary || {
 			log "hud show skipped: binary_missing"
@@ -248,7 +260,7 @@ show_send_window_hud() {
 
 show_send_window_hud_if_enabled() {
 	[ "$DJI_ENABLE_READY_HUD" = "1" ] || return 0
-	show_send_window_hud "$1"
+	show_send_window_hud "$1" "$2"
 }
 
 load_optional_config
@@ -278,22 +290,87 @@ log() { /usr/bin/printf '%s %s\n' "$(timestamp)" "$*" >>"$LOG"; }
 read_file() { /bin/cat "$STATE_DIR/$1" 2>/dev/null; }
 write_file() { /usr/bin/printf '%s' "$2" >"$STATE_DIR/$1"; }
 
+generate_session_id() {
+	if [ -n "$PYTHON3_BIN" ]; then
+		"$PYTHON3_BIN" - <<'PY' 2>/dev/null
+import os, time
+print(f"{int(time.time() * 1000)}-{os.getpid()}")
+PY
+	else
+		/bin/date +%s
+	fi
+}
+
+current_session_id() { read_file session_id; }
+
+session_is_current() {
+	local expected_session_id="$1"
+	[ -n "$expected_session_id" ] || return 1
+	[ "$(current_session_id)" = "$expected_session_id" ]
+}
+
+wait_for_state_value() {
+	local name="$1"
+	local polls="${2:-$WATCH_STATE_READY_POLLS}"
+	local interval="${3:-$WATCH_STATE_READY_INTERVAL}"
+	local value=""
+	local i=0
+	while [ $i -lt "$polls" ]; do
+		value="$(read_file "$name")"
+		if [ -n "$value" ]; then
+			printf '%s' "$value"
+			return 0
+		fi
+		/bin/sleep "$interval"
+		i=$((i + 1))
+	done
+	return 1
+}
+
+wait_for_process_exit() {
+	local pid="$1"
+	local polls="${2:-$WATCHER_STOP_POLLS}"
+	local interval="${3:-$WATCHER_STOP_INTERVAL}"
+	local i=0
+	while [ $i -lt "$polls" ]; do
+		/bin/kill -0 "$pid" 2>/dev/null || return 0
+		/bin/sleep "$interval"
+		i=$((i + 1))
+	done
+	/bin/kill -0 "$pid" 2>/dev/null && return 1
+	return 0
+}
+
 kill_old_watcher() {
 	local pid
 	pid="$(read_file watcher.pid)"
-	[ -n "$pid" ] && /bin/kill "$pid" 2>/dev/null
+	if [ -n "$pid" ]; then
+		/bin/kill "$pid" 2>/dev/null
+		if ! wait_for_process_exit "$pid"; then
+			/bin/kill -9 "$pid" 2>/dev/null
+			wait_for_process_exit "$pid" 5 "$WATCHER_STOP_INTERVAL" >/dev/null 2>&1
+		fi
+	fi
 	/bin/rm -f "$STATE_DIR/watcher.pid"
 }
 
 cleanup() {
-	dismiss_ready_hud
-	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid}
+	local expected_session_id="${1:-}"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
+	dismiss_ready_hud "$expected_session_id"
+	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id}
 }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
 clear_watch_state() {
-	dismiss_ready_hud
+	local expected_session_id="${1:-}"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
+	dismiss_ready_hud "$expected_session_id"
 	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
 }
 
@@ -341,8 +418,9 @@ sleep_until_deadline() {
 
 start_send_window() {
 	local mode="$1"
+	local expected_session_id="${2:-}"
 	local deadline
-	show_send_window_hud_if_enabled "$CONFIRM_WINDOW"
+	show_send_window_hud_if_enabled "$CONFIRM_WINDOW" "$expected_session_id"
 	deadline="$(window_deadline_timestamp "$CONFIRM_WINDOW")"
 	log "watch ${mode} send_window_started window=${CONFIRM_WINDOW}s deadline=${deadline}"
 	printf '%s' "$deadline"
@@ -351,7 +429,11 @@ start_send_window() {
 expire_send_window() {
 	local mode="$1"
 	local keep_watcher="${2:-0}"
-	dismiss_ready_hud
+	local expected_session_id="${3:-}"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
+	dismiss_ready_hud "$expected_session_id"
 	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
 	log "watch ${mode} window_expired"
 	if [ "$keep_watcher" != "1" ]; then
@@ -364,17 +446,24 @@ enter_ready_window() {
 	local deadline="$2"
 	local polls="$3"
 	local grace_polls="${4:-0}"
+	local expected_session_id="${5:-}"
 	local remaining_window
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
 	remaining_window="$(remaining_deadline_seconds "$deadline")"
 	if ! awk -v remaining="$remaining_window" 'BEGIN { exit !(remaining > 0) }'; then
-		expire_send_window "$mode"
+		expire_send_window "$mode" 0 "$expected_session_id"
 		return
 	fi
 	set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
 	log "watch ${mode} content_settled (${polls} polls ~$((polls / 10))s grace_polls=${grace_polls}) remaining=${remaining_window}s"
 	sleep_until_deadline "$deadline"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
 	set_vars '{"dji_ready_to_send":0}'
-	expire_send_window "$mode"
+	expire_send_window "$mode" 0 "$expected_session_id"
 }
 
 wait_for_pending_confirm() {
@@ -493,9 +582,12 @@ save)
 	anchor_rowid="$(typeless_last_rowid)"
 	[ -n "$anchor_rowid" ] || anchor_rowid=0
 	anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
+	session_id="$(generate_session_id)"
+	[ -n "$session_id" ] || session_id="$$-$(/bin/date +%s)"
 	write_file save_ts "$save_ts"
 	write_file db_anchor_rowid "$anchor_rowid"
 	write_file db_anchor_updated_at "$anchor_updated_at"
+	write_file session_id "$session_id"
 
 	front_bundle="$("$OSASCRIPT_BIN" -e \
 		'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
@@ -527,15 +619,17 @@ save)
 watch)
 	kill_old_watcher
 	set_vars '{"dji_ready_to_send":0}'
-	trap 'clear_watch_state' EXIT TERM INT
+	watch_session_id="$(wait_for_state_value session_id)"
+	trap 'clear_watch_state "$watch_session_id"' EXIT
+	trap 'clear_watch_state "$watch_session_id"; exit 0' TERM INT
 
-	mode="$(read_file mode)"
+	mode="$(wait_for_state_value mode)"
 	write_file watcher.pid "$$"
 
 	if [ "$mode" = "tmux" ]; then
-		pane="$(read_file pane_id)"
+		pane="$(wait_for_state_value pane_id)"
 		[ -n "$pane" ] || {
-			cleanup
+			cleanup "$watch_session_id"
 			exit 0
 		}
 		save_ts="$(read_file save_ts)"
@@ -543,12 +637,14 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		window_deadline="$(start_send_window tmux)"
+		window_deadline="$(start_send_window tmux "$watch_session_id")"
 
 		changed=0 i=0 done_status="" has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
+			session_is_current "$watch_session_id" || exit 0
 			/bin/sleep "$WATCH_POLL_INTERVAL"
 			i=$((i + 1))
+			session_is_current "$watch_session_id" || exit 0
 			done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
 			if [ -n "$done_status" ]; then
 				changed=1 && break
@@ -562,42 +658,44 @@ watch)
 			if [ $has_record -eq 1 ] && [ $((i % STALE_CHECK_EVERY_POLLS)) -eq 0 ]; then
 				if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
 					log "watch tmux stale_record (${i} polls ~$((i / 10))s), abort"
-					clear_watch_state
+					clear_watch_state "$watch_session_id"
 					/bin/rm -f "$STATE_DIR/watcher.pid"
 					exit 0
 				fi
 			fi
 			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window tmux
+				expire_send_window tmux 0 "$watch_session_id"
 				exit 0
 			fi
 		done
 
 		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+			session_is_current "$watch_session_id" || exit 0
 			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window tmux
+				expire_send_window tmux 0 "$watch_session_id"
 				exit 0
 			fi
 			log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then
+				session_is_current "$watch_session_id" || exit 0
 				if ! deadline_has_remaining "$window_deadline"; then
-					expire_send_window tmux
+					expire_send_window tmux 0 "$watch_session_id"
 					exit 0
 				fi
 				/bin/sleep "$DELIVERY_DELAY"
 				$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
-				clear_watch_state
+				clear_watch_state "$watch_session_id"
 				log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
-				cleanup
+				cleanup "$watch_session_id"
 			else
-				enter_ready_window tmux "$window_deadline" "$i" "$pending_confirm_polls"
+				enter_ready_window tmux "$window_deadline" "$i" "$pending_confirm_polls" "$watch_session_id"
 			fi
 		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
-			clear_watch_state
+			clear_watch_state "$watch_session_id"
 			log "watch tmux dismissed (${i} polls ~$((i / 10))s)"
 			/bin/rm -f "$STATE_DIR/watcher.pid"
 		else
-			clear_watch_state
+			clear_watch_state "$watch_session_id"
 			log "watch tmux no_change (timeout 30s)"
 			/bin/rm -f "$STATE_DIR/watcher.pid"
 		fi
@@ -608,12 +706,14 @@ watch)
 		anchor_updated_at="$(read_file db_anchor_updated_at)"
 		[ -n "$anchor_rowid" ] || anchor_rowid=0
 		log "watch mode=gui save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		window_deadline="$(start_send_window gui)"
+		window_deadline="$(start_send_window gui "$watch_session_id")"
 
 		changed=0 i=0 has_record=0
 		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
+			session_is_current "$watch_session_id" || exit 0
 			/bin/sleep "$WATCH_POLL_INTERVAL"
 			i=$((i + 1))
+			session_is_current "$watch_session_id" || exit 0
 			done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
 			if [ -n "$done_status" ]; then
 				changed=1 && break
@@ -627,42 +727,44 @@ watch)
 			if [ $has_record -eq 1 ] && [ $((i % STALE_CHECK_EVERY_POLLS)) -eq 0 ]; then
 				if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
 					log "watch gui stale_record (${i} polls ~$((i / 10))s), abort"
-					clear_watch_state
+					clear_watch_state "$watch_session_id"
 					/bin/rm -f "$STATE_DIR/watcher.pid"
 					exit 0
 				fi
 			fi
 			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window gui
+				expire_send_window gui 0 "$watch_session_id"
 				exit 0
 			fi
 		done
 
 		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+			session_is_current "$watch_session_id" || exit 0
 			if ! deadline_has_remaining "$window_deadline"; then
-				expire_send_window gui
+				expire_send_window gui 0 "$watch_session_id"
 				exit 0
 			fi
 			log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then
+				session_is_current "$watch_session_id" || exit 0
 				if ! deadline_has_remaining "$window_deadline"; then
-					expire_send_window gui
+					expire_send_window gui 0 "$watch_session_id"
 					exit 0
 				fi
 				/bin/sleep "$DELIVERY_DELAY"
 				gui_send_enter
-				clear_watch_state
+				clear_watch_state "$watch_session_id"
 				log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
-				cleanup
+				cleanup "$watch_session_id"
 			else
-				enter_ready_window gui "$window_deadline" "$i" "$pending_confirm_polls"
+				enter_ready_window gui "$window_deadline" "$i" "$pending_confirm_polls" "$watch_session_id"
 			fi
 		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
-			clear_watch_state
+			clear_watch_state "$watch_session_id"
 			log "watch gui dismissed (${i} polls ~$((i / 10))s)"
 			/bin/rm -f "$STATE_DIR/watcher.pid"
 		else
-			clear_watch_state
+			clear_watch_state "$watch_session_id"
 			log "watch gui no_change (timeout 30s)"
 			/bin/rm -f "$STATE_DIR/watcher.pid"
 		fi

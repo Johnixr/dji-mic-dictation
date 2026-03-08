@@ -145,6 +145,45 @@
                 {
                     "conditions": [
                         {
+                            "name": "dji_dictation_active",
+                            "type": "variable_if",
+                            "value": 1
+                        },
+                        {
+                            "name": "dji_watching",
+                            "type": "variable_unless",
+                            "value": 1
+                        },
+                        {
+                            "name": "dji_ready_to_send",
+                            "type": "variable_unless",
+                            "value": 1
+                        }
+                    ],
+                    "from": {
+                        "key_code": "escape",
+                        "modifiers": {
+                            "optional": [
+                                "any"
+                            ]
+                        }
+                    },
+                    "to": [
+                        {
+                            "set_variable": {
+                                "name": "dji_dictation_active",
+                                "value": 0
+                            }
+                        },
+                        {
+                            "key_code": "escape"
+                        }
+                    ],
+                    "type": "basic"
+                },
+                {
+                    "conditions": [
+                        {
                             "identifiers": [
                                 {
                                     "product_id": 16401,

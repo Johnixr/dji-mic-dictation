@@ -83,6 +83,42 @@ def test_dji_save_rule_sets_dictation_active_only_on_to_if_alone():
     ]
 
 
+def test_escape_clears_dictation_active_while_preserving_escape_key():
+    rule = load_rule()
+    escape_manip = next(
+        manip
+        for manip in rule["manipulators"]
+        if manip.get("from", {}).get("key_code") == "escape"
+    )
+
+    conditions = escape_manip.get("conditions", [])
+    assert {
+        "name": "dji_dictation_active",
+        "type": "variable_if",
+        "value": 1,
+    } in conditions
+    assert {
+        "name": "dji_watching",
+        "type": "variable_unless",
+        "value": 1,
+    } in conditions
+    assert {
+        "name": "dji_ready_to_send",
+        "type": "variable_unless",
+        "value": 1,
+    } in conditions
+
+    assert escape_manip.get("to", []) == [
+        {
+            "set_variable": {
+                "name": "dji_dictation_active",
+                "value": 0,
+            }
+        },
+        {"key_code": "escape"},
+    ]
+
+
 def test_fn_and_dji_routes_are_present_in_expected_order():
     rule = load_rule()
 
