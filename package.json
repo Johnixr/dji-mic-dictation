@@ -1,0 +1,19 @@
+{
+  "name": "dji-mic-dictation",
+  "version": "0.1.0",
+  "description": "CLI installer and updater for DJI Mic Mini dictation on macOS",
+  "type": "module",
+  "bin": {
+    "dji-mic-dictation": "./cli/index.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "node --check cli/index.mjs && node --check cli/lib/*.mjs && node --check cli-tests/*.test.mjs",
+    "test:node": "node --test cli-tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0"
+  }
+}

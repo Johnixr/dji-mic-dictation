@@ -93,7 +93,7 @@
                             "key_code": "fn"
                         },
                         {
-                            "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &"
+                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route fn-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route fn-watch watch 2>/dev/null &"
                         }
                     ],
                     "type": "basic"
@@ -141,6 +141,45 @@
                             }
                         }
                     ]
+                },
+                {
+                    "conditions": [
+                        {
+                            "name": "dji_dictation_active",
+                            "type": "variable_if",
+                            "value": 1
+                        },
+                        {
+                            "name": "dji_watching",
+                            "type": "variable_unless",
+                            "value": 1
+                        },
+                        {
+                            "name": "dji_ready_to_send",
+                            "type": "variable_unless",
+                            "value": 1
+                        }
+                    ],
+                    "from": {
+                        "key_code": "escape",
+                        "modifiers": {
+                            "optional": [
+                                "any"
+                            ]
+                        }
+                    },
+                    "to": [
+                        {
+                            "set_variable": {
+                                "name": "dji_dictation_active",
+                                "value": 0
+                            }
+                        },
+                        {
+                            "key_code": "escape"
+                        }
+                    ],
+                    "type": "basic"
                 },
                 {
                     "conditions": [
@@ -258,7 +297,7 @@
                             "key_code": "fn"
                         },
                         {
-                            "shell_command": "/usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &"
+                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-open-window open-window 2>/dev/null; /usr/bin/nohup ~/.config/karabiner/scripts/dictation-enter.sh route dji-watch watch 2>/dev/null &"
                         }
                     ],
                     "type": "basic"
@@ -300,10 +339,13 @@
                     },
                     "to": [
                         {
-                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-save save 2>/dev/null"
-                        },
-                        {
                             "key_code": "fn"
+                        }
+                    ],
+                    "type": "basic",
+                    "to_if_alone": [
+                        {
+                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-save save 2>/dev/null"
                         },
                         {
                             "set_variable": {
@@ -311,8 +353,7 @@
                                 "value": 1
                             }
                         }
-                    ],
-                    "type": "basic"
+                    ]
                 }
             ]
         }

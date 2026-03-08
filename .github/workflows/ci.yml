@@ -19,10 +19,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
       - name: Install system tools
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck shfmt
+
+      - name: Install Node dependencies
+        run: npm ci
 
       - name: Run lint
         run: scripts/validate.sh lint
@@ -39,10 +48,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
       - name: Install system tools
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck shfmt
+
+      - name: Install Node dependencies
+        run: npm ci
 
       - name: Install Python dependencies
         run: |

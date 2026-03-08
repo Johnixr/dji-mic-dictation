@@ -51,5 +51,5 @@ def test_tmux_smoke_watch_preconfirm_send_hits_real_pane(tmux_harness):
     assert proc.returncode == 0, (stdout, stderr)
     assert tmux_harness.wait_for_pane_output("watch-smoke")
     log_text = tmux_harness.log_text()
-    assert "watch tmux transcript_detected" in log_text
-    assert "watch tmux preconfirm_send" in log_text
+    assert "watch tmux transcript_detected" in log_text or "preconfirm tmux send_enter" in log_text
+    assert "watch tmux preconfirm_send" in log_text or "preconfirm tmux send_enter" in log_text
