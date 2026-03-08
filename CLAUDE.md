@@ -12,6 +12,37 @@ Maps the DJI Mic Mini's volume+ button to macOS dictation (Fn key), with adaptiv
 4. **3rd press (within 3s)**: Send Enter to current frontmost app
 5. **No press within 3s**: Silent reset, no side effects
 
+## Validation requirements
+
+After **any** code change (feature work, refactor, bug fix, config update), you must proactively run the repository validation suite before handing control back to the user. Do not wait for the user to remind you.
+
+This is a **local pre-handoff requirement**, not just a CI requirement. Run it yourself after every code change; CI is only the backstop.
+
+Run:
+
+```bash
+scripts/validate.sh
+```
+
+If `pytest` is missing, install dev dependencies first:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
+The validation suite currently includes three layers:
+
+1. **Lint**
+   - `bash -n scripts/dictation-enter.sh`
+   - `shfmt -d scripts/*.sh`
+   - `shellcheck scripts/*.sh`
+2. **Test**
+   - `python3 -m pytest -q -m "not smoke"`
+3. **Smoke Test**
+   - `python3 -m pytest -q -m smoke`
+
+The CI pipeline must also run these three stages separately: `lint`, `test`, and `smoke-test`.
+
 ## Installation steps (execute in order)
 
 ### 1. Install Karabiner-Elements
