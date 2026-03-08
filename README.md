@@ -56,11 +56,10 @@ npx github:Johnixr/dji-mic-dictation install
 
 ```
 Fn press 1 → start dictation → speak freely, any duration
-Fn press 2 → stop dictation → polls for text input
-           → text detected → sound + window shake = send window is open
+Fn press 2 → stop dictation → send window opens (ready overlay + sound once text lands)
 Fn press 3 → send / Enter to current app → AI starts working
 
-No press? → auto-reset after 3 seconds, no side effects
+No press? → auto-reset after 4 seconds, no side effects
 ```
 
 Optional: if you enable the DJI trigger during install, the Mic Mini button mirrors the same workflow.
@@ -116,10 +115,10 @@ cat /tmp/dji-dictation/debug.log
 |---------|-------------|-----|
 | The optional hardware button does nothing | Karabiner can't see the device | Grant **Input Monitoring** permission to Karabiner in System Settings → Privacy & Security |
 | The optional hardware button changes volume instead of dictation | The installer did not detect the device when you installed, so only the keyboard workflow was configured | Re-run `npx github:Johnixr/dji-mic-dictation install` with the DJI receiver connected |
-| Dictation works but no "Tink" sound / no window shake | Accessibility permission missing | Grant **Accessibility** permission to `/usr/bin/osascript` (or the terminal app running the script) |
-| "Tink" plays but window doesn't shake | App has non-standard windows (e.g. Electron overlay) | Already handled for Feishu/Lark; [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) for other apps |
+| Dictation works but no sound / no ready overlay | Accessibility permission missing | Grant **Accessibility** permission to `/usr/bin/osascript` (or the terminal app running the script) |
+| Sound plays but overlay doesn't appear | The ready overlay requires a compiled Swift binary; run `npx github:Johnixr/dji-mic-dictation update` to refresh. Some apps have non-standard windows (e.g. Electron overlay); already handled for Feishu/Lark; [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) for other apps |
 | CLI says Typeless DB is missing | Typeless is not installed or has never been opened | Install Typeless, launch it once, then run `npx github:Johnixr/dji-mic-dictation install` or `npx github:Johnixr/dji-mic-dictation doctor` again |
-| Window shakes but Enter doesn't send | Terminal app needs Accessibility permission | Grant **Accessibility** to your terminal (iTerm2 / Terminal.app) |
+| Overlay shows but Enter doesn't send | Terminal app needs Accessibility permission | Grant **Accessibility** to your terminal (iTerm2 / Terminal.app) |
 | Enter sends to wrong app | Old build or stale install | Run `npx github:Johnixr/dji-mic-dictation update` from the latest repo version |
 
 ### Permissions checklist

@@ -7,10 +7,9 @@ You are setting up a keyboard-first dictation/send workflow on macOS. `Fn` is th
 Builds an adaptive dictation/send workflow around the macOS `Fn` dictation trigger:
 
 1. **1st `Fn` press**: Start dictation
-2. **2nd `Fn` press**: Stop dictation + poll for text input via Typeless DB
-3. **Text detected**: Audio chime + window shake = send window is open
-4. **3rd `Fn` press (within 3s)**: Send Enter to current frontmost app
-5. **No press within 3s**: Silent reset, no side effects
+2. **2nd `Fn` press**: Stop dictation + open send window (ready overlay + audio chime once text lands)
+3. **3rd `Fn` press (within 4s)**: Send Enter to current frontmost app
+4. **No press within 4s**: Silent reset, no side effects
 
 If the optional DJI trigger is enabled, its button mirrors the same save / preconfirm / confirm flow.
 
@@ -98,7 +97,7 @@ Only treat device connection as relevant when the optional DJI trigger mode is e
 npx github:Johnixr/dji-mic-dictation config
 ```
 
-Use this to change audio feedback and window shake settings.
+Use this to change audio feedback and ready overlay settings.
 
 ### Uninstall
 
@@ -122,9 +121,8 @@ This should remove only the managed script/config/Karabiner entries, without clo
 Persist user-facing settings in `~/.config/dji-mic-dictation/config.env`:
 
 - `DJI_ENABLE_AUDIO_FEEDBACK=1|0`
-- `DJI_READY_SOUND_NAME=<sound name from /System/Library/Sounds>`
 - `DJI_PRECONFIRM_SOUND_NAME=<sound name from /System/Library/Sounds>`
-- `DJI_ENABLE_WINDOW_SHAKE=1|0`
+- `DJI_ENABLE_READY_HUD=1|0`
 
 ## Troubleshooting
 
@@ -134,8 +132,8 @@ If the user reports issues, check these in order:
 
 1. **Button does nothing** → Karabiner needs **Input Monitoring** permission. Check System Settings → Privacy & Security → Input Monitoring.
 2. **Optional hardware button changes volume instead of triggering dictation** → The optional DJI trigger mode was not enabled, or the device is not grabbed. Verify `"is_consumer": true, "ignore": false` in karabiner.json devices when the optional trigger is enabled.
-3. **No sound / no window shake after dictation** → `/usr/bin/osascript` or the terminal app needs **Accessibility** permission. Check System Settings → Privacy & Security → Accessibility.
-4. **Sound plays but window doesn't shake** → Some Electron apps (like Feishu/Lark) have invisible overlay windows. The script already filters for `AXStandardWindow`. If another app has this issue, inspect its windows and add handling.
+3. **No sound / no ready overlay after dictation** → `/usr/bin/osascript` or the terminal app needs **Accessibility** permission. Check System Settings → Privacy & Security → Accessibility.
+4. **Sound plays but overlay doesn't appear** → The ready overlay requires a compiled Swift binary. Run `npx github:Johnixr/dji-mic-dictation update` to refresh. Some Electron apps (like Feishu/Lark) have invisible overlay windows; the script already filters for `AXStandardWindow`.
 5. **CLI reports missing Typeless DB** → Typeless is not installed or has never been opened. Install/open Typeless once, then rerun `npx github:Johnixr/dji-mic-dictation install` or `npx github:Johnixr/dji-mic-dictation doctor`.
 6. **Enter doesn't send** → Terminal app (iTerm2 / Terminal.app) needs **Accessibility** permission.
 

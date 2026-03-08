@@ -187,6 +187,9 @@ function buildConfigOverrides(flags) {
 		overrides.preconfirmSoundName = '';
 	} else if (audioFeedbackEnabled === true) {
 		overrides.audioFeedbackEnabled = audioFeedbackEnabled;
+		if (flags.preconfirmSoundName == null) {
+			overrides.preconfirmSoundName = DEFAULT_CONFIG.preconfirmSoundName;
+		}
 	}
 	if (flags.preconfirmSoundName != null) {
 		overrides.preconfirmSoundName = flags.preconfirmSoundName;

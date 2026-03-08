@@ -363,6 +363,24 @@ test('CLI config command supports setting preconfirm sound independently', async
 	assert.equal(payload.result.preconfirmSoundName, 'Frog');
 });
 
+test('CLI config --sound on restores default preconfirm sound after --sound off', async () => {
+	const fixture = await createFixture();
+	await execFileAsync(
+		process.execPath,
+		[path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'), 'config', '--sound', 'off', '--json'],
+		{ env: fixture.env },
+	);
+	const { stdout } = await execFileAsync(
+		process.execPath,
+		[path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'), 'config', '--sound', 'on', '--json'],
+		{ env: fixture.env },
+	);
+	const payload = JSON.parse(stdout);
+	assert.equal(payload.ok, true);
+	assert.equal(payload.result.audioFeedbackEnabled, true);
+	assert.equal(payload.result.preconfirmSoundName, 'Sosumi');
+});
+
 test('system sounds are discovered from the configured sound directory', async () => {
 	const fixture = await createFixture();
 	const sounds = await listSystemSounds(fixture.runtime);

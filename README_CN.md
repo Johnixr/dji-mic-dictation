@@ -56,11 +56,10 @@ npx github:Johnixr/dji-mic-dictation install
 
 ```
 Fn 第 1 下 → 开始听写 → 随便说多久
-Fn 第 2 下 → 结束听写 → 轮询检测文字输入
-         → 文字上屏 → 提示音 + 窗口震动 = 发送窗口打开
+Fn 第 2 下 → 结束听写 → 发送窗口打开（就绪浮层 + 文字上屏后提示音）
 Fn 第 3 下 → 发送 / Enter 到当前 App → AI 开始干活
 
-没按？ → 3 秒后自动重置，无副作用
+没按？ → 4 秒后自动重置，无副作用
 ```
 
 如果在安装时启用了 DJI 触发器，那么 Mic Mini 按钮会镜像这套同样的流程。
@@ -115,10 +114,10 @@ cat /tmp/dji-dictation/debug.log
 |------|---------|---------|
 | 可选硬件按钮没反应 | Karabiner 看不到设备 | 系统设置 → 隐私与安全 → 输入监控，给 Karabiner 授权 |
 | 可选硬件按钮只调音量 | 安装时没有检测到设备，所以只配置了 keyboard workflow | 把 DJI 接收器插上后重新执行 `npx github:Johnixr/dji-mic-dictation install` |
-| 听写正常但没有提示音/窗口不抖 | 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 `/usr/bin/osascript` 或终端 App 授权 |
-| 有提示音但窗口不抖 | App 有非标准窗口（如 Electron 水印层） | 飞书已适配；其他 App 欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
+| 听写正常但没有提示音/浮层不出现 | 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 `/usr/bin/osascript` 或终端 App 授权 |
+| 有提示音但浮层不出现 | 就绪浮层需要编译 Swift 二进制；执行 `npx github:Johnixr/dji-mic-dictation update` 刷新。部分 App 有非标准窗口（如 Electron 水印层），飞书已适配；其他 App 欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
 | CLI 提示找不到 Typeless DB | Typeless 没安装或还没打开过 | 安装 Typeless，至少打开一次，再重新执行 `npx github:Johnixr/dji-mic-dictation install` 或 `npx github:Johnixr/dji-mic-dictation doctor` |
-| 窗口抖了但 Enter 没发出去 | 终端 App 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 iTerm2 / Terminal.app 授权 |
+| 浮层出现但 Enter 没发出去 | 终端 App 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 iTerm2 / Terminal.app 授权 |
 | 发送逻辑不对或者还是旧脚本 | 已安装版本太旧 | 拉最新仓库后执行 `npx github:Johnixr/dji-mic-dictation update` |
 
 ### 权限清单
