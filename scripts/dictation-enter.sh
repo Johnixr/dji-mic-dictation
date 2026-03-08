@@ -51,7 +51,7 @@ kill_old_watcher() {
   /bin/rm -f "$STATE_DIR/watcher.pid"
 }
 
-cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at}; }
+cleanup() { /bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,win_pos}; }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
@@ -103,6 +103,57 @@ typeless_check_stale() {
   local stale_seconds=5
   sqlite3 "$TYPELESS_DB" \
     "SELECT 1 FROM history WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
+}
+
+# 保存当前窗口位置并震动（跳过非标准窗口如水印层）
+shake_window() {
+  /usr/bin/osascript -l JavaScript <<JS 2>/dev/null
+var se = Application("System Events");
+var fp = se.processes.whose({frontmost: true})[0];
+var wins = fp.windows();
+var fw = null;
+for (var i = 0; i < wins.length; i++) {
+  if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
+}
+if (!fw && wins.length > 0) fw = wins[0];
+if (!fw) { "no window"; } else {
+  var pos = fw.position();
+  var x = pos[0], y = pos[1];
+  var app = Application.currentApplication();
+  app.includeStandardAdditions = true;
+  app.doShellScript("printf '%s %s' " + x + " " + y + " > ${STATE_DIR}/win_pos");
+  for (var r = 0; r < 6; r++) {
+    fw.position = [x + 4, y]; delay(0.01);
+    fw.position = [x - 4, y]; delay(0.01);
+  }
+  delay(0.05); fw.position = [x, y];
+  delay(0.05); fw.position = [x, y];
+  "ok";
+}
+JS
+}
+
+# 强制归位窗口（confirm 时调用，防止抖动被中断后窗口偏移）
+restore_window() {
+  local saved; saved="$(read_file win_pos)"
+  [ -z "$saved" ] && return
+  local x y
+  x="${saved% *}"
+  y="${saved#* }"
+  /usr/bin/osascript -l JavaScript - "$x" "$y" <<'JS' 2>/dev/null
+function run(argv) {
+  var x = parseInt(argv[0]), y = parseInt(argv[1]);
+  var se = Application("System Events");
+  var fp = se.processes.whose({frontmost: true})[0];
+  var wins = fp.windows();
+  var fw = null;
+  for (var i = 0; i < wins.length; i++) {
+    if (wins[i].subrole() === "AXStandardWindow") { fw = wins[i]; break; }
+  }
+  if (!fw && wins.length > 0) fw = wins[0];
+  if (fw) { fw.position = [x, y]; }
+}
+JS
 }
 
 gui_send_enter() {
@@ -221,6 +272,8 @@ case "$1" in
           cleanup
         else
           set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
+          /usr/bin/afplay /System/Library/Sounds/Tink.aiff &
+          shake_window
           log "watch tmux content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
           /bin/sleep "$CONFIRM_WINDOW"
           set_vars '{"dji_ready_to_send":0}'
@@ -278,6 +331,8 @@ case "$1" in
           cleanup
         else
           set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
+          /usr/bin/afplay /System/Library/Sounds/Tink.aiff &
+          shake_window
           log "watch gui content_settled (${i} polls ~$((i / 10))s) window=${CONFIRM_WINDOW}s"
           /bin/sleep "$CONFIRM_WINDOW"
           set_vars '{"dji_ready_to_send":0}'
@@ -306,8 +361,8 @@ case "$1" in
     ;;
 
   confirm)
-    /usr/bin/afplay /System/Library/Sounds/Sosumi.aiff &
     kill_old_watcher
+    restore_window
     set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 
     mode="$(read_file mode)"
