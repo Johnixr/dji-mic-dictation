@@ -300,10 +300,13 @@
                     },
                     "to": [
                         {
-                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-save save 2>/dev/null"
-                        },
-                        {
                             "key_code": "fn"
+                        }
+                    ],
+                    "type": "basic",
+                    "to_if_alone": [
+                        {
+                            "shell_command": "~/.config/karabiner/scripts/dictation-enter.sh route dji-save save 2>/dev/null"
                         },
                         {
                             "set_variable": {
@@ -311,8 +314,7 @@
                                 "value": 1
                             }
                         }
-                    ],
-                    "type": "basic"
+                    ]
                 }
             ]
         }

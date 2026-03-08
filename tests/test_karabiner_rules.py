@@ -50,6 +50,39 @@ def test_fn_save_rule_is_present_and_sets_dictation_active():
     assert key_entries == [{"key_code": "fn"}]
 
 
+def test_dji_save_rule_sets_dictation_active_only_on_to_if_alone():
+    rule = load_rule()
+    save_manip = next(
+        manip
+        for manip in rule["manipulators"]
+        if manip.get("from", {}).get("consumer_key_code") == "volume_increment"
+        and any(
+            " route dji-save save " in cmd
+            for cmd in shell_commands(manip.get("to", [])) + shell_commands(manip.get("to_if_alone", []))
+        )
+    )
+
+    assert shell_commands(save_manip.get("to", [])) == []
+    assert shell_commands(save_manip.get("to_if_alone", [])) == [
+        "~/.config/karabiner/scripts/dictation-enter.sh route dji-save save 2>/dev/null"
+    ]
+
+    key_entries = [item for item in save_manip.get("to", []) if item.get("key_code") == "fn"]
+    assert key_entries == [{"key_code": "fn"}]
+
+    set_variable_entries = [
+        item["set_variable"]
+        for item in save_manip.get("to_if_alone", [])
+        if "set_variable" in item
+    ]
+    assert set_variable_entries == [
+        {
+            "name": "dji_dictation_active",
+            "value": 1,
+        }
+    ]
+
+
 def test_fn_and_dji_routes_are_present_in_expected_order():
     rule = load_rule()
 
