@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFile as execFileCallback } from 'node:child_process';
+import { execFile as execFileCallback, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import process from 'node:process';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import {
 	confirm,
 	intro,
 	isCancel,
+	log,
 	note,
 	outro,
 	select,
@@ -573,21 +574,34 @@ async function collectInteractiveProfileOptions(runtime) {
 }
 
 async function brewInstallKarabiner(showUi) {
-	const s = createProgress(showUi);
-	s.start('Installing Karabiner-Elements via Homebrew');
-	try {
-		await execFile('brew', ['install', '--cask', 'karabiner-elements']);
-		s.stop('Karabiner-Elements installed');
-	} catch (error) {
-		s.stop('Karabiner-Elements installation failed');
-		const detail = [error.stderr, error.stdout, error.message]
-			.map((value) => value?.trim())
-			.find(Boolean);
-		throw createCliError(
-			`Failed to install Karabiner-Elements via Homebrew${detail ? `: ${detail}` : '.'}`,
-			'KARABINER_INSTALL_FAILED',
-			error,
-		);
+	const brewArgs = ['install', '--cask', 'karabiner-elements'];
+	if (showUi) {
+		note('Running: brew install --cask karabiner-elements\n(this may take a few minutes and ask for your password)', 'Homebrew');
+		const code = await new Promise((resolve, reject) => {
+			const child = spawn('brew', brewArgs, { stdio: 'inherit' });
+			child.on('error', reject);
+			child.on('close', resolve);
+		});
+		if (code !== 0) {
+			throw createCliError(
+				`brew install exited with code ${code}`,
+				'KARABINER_INSTALL_FAILED',
+			);
+		}
+		log.success('Karabiner-Elements installed');
+	} else {
+		try {
+			await execFile('brew', brewArgs);
+		} catch (error) {
+			const detail = [error.stderr, error.stdout, error.message]
+				.map((value) => value?.trim())
+				.find(Boolean);
+			throw createCliError(
+				`Failed to install Karabiner-Elements via Homebrew${detail ? `: ${detail}` : '.'}`,
+				'KARABINER_INSTALL_FAILED',
+				error,
+			);
+		}
 	}
 }
 
