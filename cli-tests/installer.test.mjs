@@ -115,8 +115,7 @@ test('install auto-enables the optional DJI trigger when the device is connected
 	const result = await install(fixture.runtime, {
 		configOverrides: {
 			audioFeedbackEnabled: false,
-			readySoundName: 'Basso',
-			windowShakeEnabled: false,
+			readyOverlayEnabled: false,
 		},
 	});
 
@@ -125,9 +124,8 @@ test('install auto-enables the optional DJI trigger when the device is connected
 	assert.equal(result.device.status, 'connected');
 	assert.deepEqual(await loadConfig(fixture.runtime), {
 		audioFeedbackEnabled: false,
-		readySoundName: 'Basso',
 		preconfirmSoundName: 'Sosumi',
-		windowShakeEnabled: false,
+		readyOverlayEnabled: false,
 	});
 
 	const installedScript = await fs.readFile(fixture.runtime.scriptTargetPath, 'utf-8');
@@ -251,7 +249,7 @@ test('update refreshes manifest version and preserves config', async () => {
 			sourceProfileName: 'Primary',
 			newProfileName: 'Primary - DJI Mic Dictation',
 		},
-		configOverrides: { audioFeedbackEnabled: true, readySoundName: 'Sosumi', windowShakeEnabled: true },
+		configOverrides: { audioFeedbackEnabled: true, preconfirmSoundName: 'Sosumi', readyOverlayEnabled: true },
 	});
 	const manifestPath = fixture.runtime.manifestFilePath;
 	const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
@@ -267,9 +265,8 @@ test('update refreshes manifest version and preserves config', async () => {
 	assert.equal(updatedManifest.triggerMode, 'keyboard+dji');
 	assert.deepEqual(await loadConfig(fixture.runtime), {
 		audioFeedbackEnabled: true,
-		readySoundName: 'Sosumi',
 		preconfirmSoundName: 'Sosumi',
-		windowShakeEnabled: true,
+		readyOverlayEnabled: true,
 	});
 
 	const karabinerConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
@@ -330,7 +327,7 @@ test('CLI config command supports non-interactive JSON output', async () => {
 			'config',
 			'--sound',
 			'off',
-			'--shake',
+			'--ready-overlay',
 			'off',
 			'--json',
 		],
@@ -340,20 +337,19 @@ test('CLI config command supports non-interactive JSON output', async () => {
 	assert.equal(payload.ok, true);
 	assert.equal(payload.command, 'config');
 	assert.equal(payload.result.audioFeedbackEnabled, false);
-	assert.equal(payload.result.readySoundName, '');
 	assert.equal(payload.result.preconfirmSoundName, '');
-	assert.equal(payload.result.windowShakeEnabled, false);
+	assert.equal(payload.result.readyOverlayEnabled, false);
+	const configText = await fs.readFile(fixture.runtime.configFilePath, 'utf-8');
+	assert.match(configText, /DJI_ENABLE_READY_HUD=0/u);
 });
 
-test('CLI config command supports independent ready and preconfirm sounds', async () => {
+test('CLI config command supports setting preconfirm sound independently', async () => {
 	const fixture = await createFixture();
 	const { stdout } = await execFileAsync(
 		process.execPath,
 		[
 			path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'),
 			'config',
-			'--ready-sound',
-			'off',
 			'--preconfirm-sound',
 			'Frog',
 			'--json',
@@ -364,7 +360,6 @@ test('CLI config command supports independent ready and preconfirm sounds', asyn
 	assert.equal(payload.ok, true);
 	assert.equal(payload.command, 'config');
 	assert.equal(payload.result.audioFeedbackEnabled, true);
-	assert.equal(payload.result.readySoundName, '');
 	assert.equal(payload.result.preconfirmSoundName, 'Frog');
 });
 

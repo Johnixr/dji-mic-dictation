@@ -19,5 +19,5 @@ export async function listSystemSounds(runtime) {
 		// Fall back to built-in defaults when the sound directory is unavailable.
 	}
 
-	return [...new Set([DEFAULT_CONFIG.readySoundName, DEFAULT_CONFIG.preconfirmSoundName])];
+	return [...new Set([DEFAULT_CONFIG.preconfirmSoundName])];
 }

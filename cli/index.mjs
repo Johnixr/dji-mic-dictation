@@ -36,17 +36,16 @@ Commands:
   install      Install or reconcile the Karabiner/script setup
   update       Refresh an existing installation to the current package version
   doctor       Diagnose the current setup and report what is missing
-  config       Update audio/shake preferences
+  config       Update audio/overlay preferences
   uninstall    Remove installed script/config/Karabiner entries
 
 Options:
   --yes                  Skip confirmation prompts where possible
   --trigger-mode <mode>  Trigger mode: keyboard | keyboard+dji
   --sound on|off         Enable or disable all notification sounds
-  --ready-sound <name>   Ready-to-send sound name from /System/Library/Sounds, or off
   --preconfirm-sound <name>
                          Preconfirm sound name from /System/Library/Sounds, or off
-  --shake on|off         Enable or disable window shake
+  --ready-overlay on|off Enable or disable the ready-to-send countdown overlay
   --profile <name>       Target Karabiner profile name
   --clone-profile-from <name>
                          Clone an existing Karabiner profile before installing
@@ -95,17 +94,11 @@ function parseArgs(argv) {
 			case '--trigger-mode':
 				flags.triggerMode = args[++index];
 				break;
-			case '--sound-name':
-				flags.readySoundName = args[++index];
-				break;
-			case '--ready-sound':
-				flags.readySoundName = args[++index];
-				break;
 			case '--preconfirm-sound':
 				flags.preconfirmSoundName = args[++index];
 				break;
-			case '--shake':
-				flags.shake = args[++index];
+			case '--ready-overlay':
+				flags.readyOverlay = args[++index];
 				break;
 			default:
 				throw new Error(`Unknown option: ${arg}`);
@@ -188,22 +181,18 @@ function parseToggle(value, key) {
 function buildConfigOverrides(flags) {
 	const overrides = {};
 	const audioFeedbackEnabled = parseToggle(flags.sound, '--sound');
-	const windowShakeEnabled = parseToggle(flags.shake, '--shake');
+	const readyOverlayEnabled = parseToggle(flags.readyOverlay, '--ready-overlay');
 	if (audioFeedbackEnabled === false) {
 		overrides.audioFeedbackEnabled = audioFeedbackEnabled;
-		overrides.readySoundName = '';
 		overrides.preconfirmSoundName = '';
 	} else if (audioFeedbackEnabled === true) {
 		overrides.audioFeedbackEnabled = audioFeedbackEnabled;
 	}
-	if (flags.readySoundName != null) {
-		overrides.readySoundName = flags.readySoundName;
-	}
 	if (flags.preconfirmSoundName != null) {
 		overrides.preconfirmSoundName = flags.preconfirmSoundName;
 	}
-	if (windowShakeEnabled != null) {
-		overrides.windowShakeEnabled = windowShakeEnabled;
+	if (readyOverlayEnabled != null) {
+		overrides.readyOverlayEnabled = readyOverlayEnabled;
 	}
 	return overrides;
 }
@@ -250,18 +239,8 @@ async function collectInteractiveConfig(runtime, overrides = {}) {
 		{ value: '', label: 'Off' },
 		...soundOptions.map((soundName) => ({ value: soundName, label: soundName })),
 	];
-	const currentReadySoundName = currentConfig.audioFeedbackEnabled ? currentConfig.readySoundName : '';
 	const currentPreconfirmSoundName = currentConfig.audioFeedbackEnabled ? currentConfig.preconfirmSoundName : '';
-	const initialReadySound = soundOptions.includes(currentReadySoundName) ? currentReadySoundName : '';
 	const initialPreconfirmSound = soundOptions.includes(currentPreconfirmSoundName) ? currentPreconfirmSoundName : '';
-	const readySoundName = await askSelectPrompt(
-		buildPromptMessage(
-			'Ready-to-send sound',
-			`Default: ${formatSoundDefaultLabel(initialReadySound)}`,
-		),
-		initialReadySound,
-		selectableSoundOptions,
-	);
 	const preconfirmSoundName = await askSelectPrompt(
 		buildPromptMessage(
 			'Preconfirm sound',
@@ -270,12 +249,11 @@ async function collectInteractiveConfig(runtime, overrides = {}) {
 		initialPreconfirmSound,
 		selectableSoundOptions,
 	);
-	const windowShakeEnabled = await askBooleanPrompt('Enable window shake when text is ready to send?', currentConfig.windowShakeEnabled);
+	const readyOverlayEnabled = await askBooleanPrompt('Enable the ready-to-send countdown overlay?', currentConfig.readyOverlayEnabled);
 	return {
-		audioFeedbackEnabled: readySoundName !== '' || preconfirmSoundName !== '',
-		readySoundName,
+		audioFeedbackEnabled: preconfirmSoundName !== '',
 		preconfirmSoundName,
-		windowShakeEnabled,
+		readyOverlayEnabled,
 	};
 }
 
@@ -679,9 +657,8 @@ async function run() {
 	} else if (command === 'config') {
 		note(
 			[
-				`ready-to-send sound: ${formatSoundSetting(result.readySoundName)}`,
 				`preconfirm sound: ${formatSoundSetting(result.preconfirmSoundName)}`,
-				`window shake: ${result.windowShakeEnabled ? 'on' : 'off'}`,
+				`ready countdown overlay: ${result.readyOverlayEnabled ? 'on' : 'off'}`,
 			].join('\n'),
 			'Configuration updated',
 		);
