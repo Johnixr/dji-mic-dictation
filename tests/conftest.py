@@ -4,6 +4,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import uuid
@@ -50,6 +51,7 @@ class DictationHarness:
         self.afplay_log = tmp_path / "afplay.log"
         self.hud_log = tmp_path / "hud.log"
         self.swiftc_log = tmp_path / "swiftc.log"
+        self.fn_log = tmp_path / "fn.log"
 
         self._create_db()
         self._write_stub_bins()
@@ -66,6 +68,7 @@ class DictationHarness:
                 "OSASCRIPT_BIN": str(self.bin_dir / "osascript"),
                 "AFPLAY_BIN": str(self.bin_dir / "afplay"),
                 "SWIFTC_BIN": str(self.bin_dir / "swiftc"),
+                "FN_KEY_HELPER_BIN": str(self.bin_dir / "fn-keypress"),
                 "PYTHON3_BIN": sys.executable,
                 "WATCH_POLL_INTERVAL": "0.01",
                 "WATCH_MAX_POLLS": "40",
@@ -77,6 +80,8 @@ class DictationHarness:
                 "PRECONFIRM_GRACE_INTERVAL": "0.01",
                 "PRECONFIRM_GRACE_POLLS": "4",
                 "DELIVERY_DELAY": "0",
+                "CANCEL_ESCAPE_DELAY": "0",
+                "WAKEWORD_REARM_DELAY": "0",
                 "FAKE_FRONT_BUNDLE": "com.google.Chrome",
                 "FAKE_ITERM_WINDOW": "↣ test",
                 "FAKE_TMUX_LIST_PANES_OUTPUT": "1 1 1 %1\n",
@@ -86,6 +91,7 @@ class DictationHarness:
                 "AFPLAY_LOG_FILE": str(self.afplay_log),
                 "HUD_LOG_FILE": str(self.hud_log),
                 "SWIFTC_LOG_FILE": str(self.swiftc_log),
+                "FN_LOG_FILE": str(self.fn_log),
                 "FAKE_WIN_POS": "100 200",
             }
         )
@@ -150,6 +156,16 @@ import sys
 log = os.environ["AFPLAY_LOG_FILE"]
 with open(log, "a", encoding="utf-8") as fh:
     fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+""",
+        )
+
+        self._write_executable(
+            "fn-keypress",
+            f"""#!/usr/bin/env {python}
+import os
+
+with open(os.environ["FN_LOG_FILE"], "a", encoding="utf-8") as fh:
+    fh.write("fn\\n")
 """,
         )
 
@@ -350,6 +366,9 @@ elif args[:2] == ["-l", "JavaScript"]:
     def swiftc_calls(self):
         return self.read_lines(self.swiftc_log)
 
+    def fn_calls(self):
+        return self.read_lines(self.fn_log)
+
 
 class RealTmuxHarness(DictationHarness):
     def __init__(self, tmp_path: Path):
@@ -357,12 +376,14 @@ class RealTmuxHarness(DictationHarness):
         self.real_tmux_bin = shutil.which("tmux")
         if not self.real_tmux_bin:
             raise RuntimeError("tmux not found")
+        self.tmux_tmpdir = Path(tempfile.mkdtemp(prefix="dji-tmux-", dir="/tmp"))
         self.tmux_socket_name = f"dji-smoke-{uuid.uuid4().hex[:8]}"
         self.session_name = f"smoke-{uuid.uuid4().hex[:8]}"
         self.tmux_output_file = tmp_path / "tmux-output.txt"
         self.env.update(
             {
                 "REAL_TMUX_BIN": self.real_tmux_bin,
+                "TMUX_TMPDIR": str(self.tmux_tmpdir),
                 "TMUX_SOCKET_NAME": self.tmux_socket_name,
                 "FAKE_FRONT_BUNDLE": "com.googlecode.iterm2",
                 "FAKE_ITERM_WINDOW": "↣ smoke",
@@ -391,7 +412,8 @@ if args and args[0] == "list-panes" and os.environ.get("FAKE_ACTIVE_TMUX_PANE"):
     raise SystemExit(0)
 
 cmd = [os.environ["REAL_TMUX_BIN"], "-L", os.environ["TMUX_SOCKET_NAME"], *args]
-proc = subprocess.run(cmd, text=True, capture_output=True)
+env = dict(os.environ)
+proc = subprocess.run(cmd, text=True, capture_output=True, env=env)
 sys.stdout.write(proc.stdout)
 sys.stderr.write(proc.stderr)
 raise SystemExit(proc.returncode)
@@ -404,12 +426,22 @@ raise SystemExit(proc.returncode)
             text=True,
             capture_output=True,
             check=check,
+            env={**os.environ, "TMUX_TMPDIR": str(self.tmux_tmpdir)},
         )
 
     def _start_tmux_session(self):
         self.real_tmux("new-session", "-d", "-s", self.session_name, "/bin/sh")
-        time.sleep(0.05)
-        pane = self.real_tmux("display-message", "-p", "-t", f"{self.session_name}:0.0", "#{pane_id}")
+        pane = None
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            try:
+                pane = self.real_tmux("display-message", "-p", "-t", f"{self.session_name}:0.0", "#{pane_id}")
+                if pane.stdout.strip():
+                    break
+            except subprocess.CalledProcessError:
+                time.sleep(0.05)
+        if pane is None or not pane.stdout.strip():
+            raise RuntimeError("tmux session started but pane id never became ready")
         self.pane_id = pane.stdout.strip()
         self.env["FAKE_ACTIVE_TMUX_PANE"] = self.pane_id
 
@@ -429,6 +461,7 @@ raise SystemExit(proc.returncode)
 
     def cleanup_tmux(self):
         self.real_tmux("kill-server", check=False)
+        shutil.rmtree(self.tmux_tmpdir, ignore_errors=True)
 
 
 @pytest.fixture

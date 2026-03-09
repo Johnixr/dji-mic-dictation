@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" font-family="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="420" rx="12" fill="#fafafa" stroke="#e5e7eb" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="400" y="36" text-anchor="middle" font-size="18" font-weight="bold" fill="#1f2937">最终状态机：一个按钮，三种动作</text>
+
+  <!-- State: Idle -->
+  <rect x="30" y="160" width="130" height="70" rx="35" fill="#f3f4f6" stroke="#9ca3af" stroke-width="2"/>
+  <text x="95" y="193" text-anchor="middle" font-size="15" font-weight="bold" fill="#4b5563">空闲</text>
+  <text x="95" y="213" text-anchor="middle" font-size="11" fill="#6b7280">dji_active=0</text>
+
+  <!-- State: Dictating -->
+  <rect x="240" y="160" width="130" height="70" rx="35" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="305" y="193" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e40af">听写中</text>
+  <text x="305" y="213" text-anchor="middle" font-size="11" fill="#3b82f6">dji_active=1</text>
+
+  <!-- State: Polling -->
+  <rect x="440" y="160" width="130" height="70" rx="35" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="505" y="193" text-anchor="middle" font-size="15" font-weight="bold" fill="#92400e">轮询中</text>
+  <text x="505" y="213" text-anchor="middle" font-size="11" fill="#b45309">检测字符数</text>
+
+  <!-- State: Send Window -->
+  <rect x="640" y="160" width="130" height="70" rx="35" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="705" y="188" text-anchor="middle" font-size="15" font-weight="bold" fill="#166534">发送窗口</text>
+  <text x="705" y="208" text-anchor="middle" font-size="11" fill="#16a34a">Tink + 抖动</text>
+  <text x="705" y="223" text-anchor="middle" font-size="11" fill="#16a34a">dji_in_window=1</text>
+
+  <!-- Arrow: Idle -> Dictating -->
+  <line x1="160" y1="185" x2="236" y2="185" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <rect x="164" y="138" width="70" height="40" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+  <text x="199" y="154" text-anchor="middle" font-size="11" font-weight="bold" fill="#2563eb">按 1 下</text>
+  <text x="199" y="170" text-anchor="middle" font-size="10" fill="#3b82f6">Fn + save</text>
+
+  <!-- Arrow: Dictating -> Polling -->
+  <line x1="370" y1="195" x2="436" y2="195" stroke="#d97706" stroke-width="2" marker-end="url(#arrow-orange)"/>
+  <rect x="367" y="138" width="70" height="40" rx="6" fill="#fffbeb" stroke="#fde68a" stroke-width="1"/>
+  <text x="402" y="154" text-anchor="middle" font-size="11" font-weight="bold" fill="#d97706">按 2 下</text>
+  <text x="402" y="170" text-anchor="middle" font-size="10" fill="#b45309">Fn + tap</text>
+
+  <!-- Arrow: Polling -> Send Window (auto) -->
+  <line x1="570" y1="195" x2="636" y2="195" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <rect x="565" y="138" width="76" height="40" rx="6" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1"/>
+  <text x="603" y="154" text-anchor="middle" font-size="11" font-weight="bold" fill="#16a34a">文字上屏</text>
+  <text x="603" y="170" text-anchor="middle" font-size="10" fill="#16a34a">自动检测</text>
+
+  <!-- Arrow: Send Window -> Idle (press 3) -->
+  <path d="M 705 230 L 705 360 L 95 360 L 95 234" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="350" y="340" width="100" height="40" rx="6" fill="#fff" stroke="#d1d5db" stroke-width="1"/>
+  <text x="400" y="356" text-anchor="middle" font-size="11" font-weight="bold" fill="#374151">按 3 下</text>
+  <text x="400" y="372" text-anchor="middle" font-size="10" fill="#6b7280">Enter + 重置</text>
+
+  <!-- Arrow: Send Window -> Idle (timeout, dashed) -->
+  <path d="M 700 232 Q 700 310 400 310 Q 100 310 98 234" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrow-gray)"/>
+  <rect x="355" y="278" width="90" height="26" rx="6" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="400" y="296" text-anchor="middle" font-size="10" fill="#9ca3af">3 秒超时重置</text>
+
+  <!-- Legend -->
+  <rect x="30" y="55" width="740" height="75" rx="8" fill="#fff" stroke="#e5e7eb" stroke-width="1"/>
+  <circle cx="60" cy="80" r="6" fill="#2563eb"/>
+  <text x="74" y="84" font-size="11" fill="#374151">按 1 下 = Fn（开始听写）</text>
+  <circle cx="280" cy="80" r="6" fill="#d97706"/>
+  <text x="294" y="84" font-size="11" fill="#374151">按 2 下 = Fn（结束听写）+ 轮询</text>
+  <circle cx="550" cy="80" r="6" fill="#16a34a"/>
+  <text x="564" y="84" font-size="11" fill="#374151">文字上屏 = 提示音 + 抖动</text>
+  <circle cx="60" cy="108" r="6" fill="#555"/>
+  <text x="74" y="112" font-size="11" fill="#374151">按 3 下 = Enter（发送）</text>
+  <line x1="270" y1="108" x2="300" y2="108" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="310" y="112" font-size="11" fill="#9ca3af">超时自动重置，无副作用</text>
+</svg>

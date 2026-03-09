@@ -69,6 +69,102 @@ def test_save_records_tmux_anchor_and_mode(harness):
     assert "save mode=tmux" in harness.log_text()
 
 
+def test_wakeword_toggle_routes_start_stop_and_confirm(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
+    harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
+    harness.insert_history(status="", refined_text="")
+
+    harness.run("wakeword-toggle")
+    assert harness.read_state("workflow_state") == "dictation_active"
+    assert harness.read_state("session_origin") == "wakeword"
+    assert harness.fn_calls() == ["fn"]
+
+    harness.run("wakeword-toggle")
+    assert _wait_for_condition(lambda: harness.read_state("workflow_state") == "watching")
+    assert harness.fn_calls() == ["fn", "fn"]
+    assert "wakeword toggle stop_watch" in harness.log_text()
+
+    harness.write_state("workflow_state", "ready_to_send")
+    harness.write_state("mode", "tmux")
+    harness.write_state("pane_id", "%1")
+
+    harness.run("wakeword-toggle")
+    assert any("send-keys -t %1 Enter" in call for call in harness.tmux_calls())
+    assert "confirm tmux send_enter pane=%1" in harness.log_text()
+
+
+def test_manual_save_marks_session_origin_and_wakeword_toggle_can_stop_dictation(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+
+    harness.run("save")
+
+    assert harness.read_state("workflow_state") == "dictation_active"
+    assert harness.read_state("session_origin") == "manual"
+
+    harness.run("wakeword-toggle")
+
+    assert _wait_for_condition(lambda: harness.read_state("workflow_state") == "watching")
+    assert harness.fn_calls() == ["fn"]
+    assert "wakeword toggle stop_watch" in harness.log_text()
+
+
+def test_wakeword_rearm_window_blocks_immediate_toggle_and_cancel_after_save(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["WAKEWORD_REARM_DELAY"] = "2.0"
+
+    harness.run("save")
+
+    assert harness.read_state("wakeword_arm_until") != ""
+
+    harness.run("wakeword-toggle")
+    assert harness.read_state("workflow_state") == "dictation_active"
+    assert "wakeword toggle ignored state=dictation_active reason=arm_window" in harness.log_text()
+
+    harness.run("wakeword-cancel")
+    assert harness.read_state("workflow_state") == "dictation_active"
+    assert "wakeword cancel ignored state=dictation_active reason=arm_window" in harness.log_text()
+    assert harness.fn_calls() == []
+
+
+def test_wakeword_cancel_clears_ready_state_and_sends_escape(harness):
+    harness.write_state("workflow_state", "ready_to_send")
+    harness.write_state("mode", "tmux")
+    harness.write_state("pane_id", "%1")
+    harness.write_state("session_id", "session-1")
+
+    harness.run("wakeword-cancel")
+
+    assert harness.read_state("workflow_state") == "idle"
+    assert harness.read_state("mode") == ""
+    assert any("send-keys -t %1 Escape" in call for call in harness.tmux_calls())
+    assert "wakeword_cancel tmux send_escape pane=%1" in harness.log_text()
+
+
+def test_wakeword_cancel_is_noop_in_idle(harness):
+    harness.write_state("workflow_state", "idle")
+
+    harness.run("wakeword-cancel")
+
+    assert harness.read_state("workflow_state") == "idle"
+    assert harness.fn_calls() == []
+    assert harness.tmux_calls() == []
+    assert harness.osascript_calls() == []
+
+
+def test_wakeword_cancel_stops_active_manual_session_and_sends_escape(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+
+    harness.run("save")
+    harness.run("wakeword-cancel")
+
+    assert harness.read_state("workflow_state") == "idle"
+    assert harness.read_state("session_origin") == ""
+    assert harness.fn_calls() == ["fn"]
+    assert any("key code 53" in " ".join(call["args"]) for call in harness.osascript_calls())
+    assert "wakeword cancel state=dictation_active" in harness.log_text()
+    assert "wakeword cancel stop_then_escape delay=0s" in harness.log_text()
+
+
 def test_watch_tmux_preconfirm_send_handles_reused_row_update(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
     harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
@@ -106,15 +202,10 @@ def test_watch_gui_logs_still_no_record_then_completes(harness):
     harness.env["NO_RECORD_LOG_LABEL"] = "first-poll"
     harness.run("save")
 
-    def insert_late_transcript():
-        time.sleep(0.25)
-        harness.insert_history(status="transcript", refined_text="late transcript")
-
-    worker = threading.Thread(target=insert_late_transcript)
-    worker.start()
     proc = harness.popen("watch")
+    assert _wait_for_log_text(harness, "watch gui still_no_record_after_first-poll", timeout=1.0)
+    harness.insert_history(status="transcript", refined_text="late transcript")
     stdout, stderr = proc.communicate(timeout=2)
-    worker.join(timeout=1)
 
     assert proc.returncode == 0, (stdout, stderr)
     log_text = harness.log_text()
@@ -149,6 +240,11 @@ def test_watch_gui_late_transcript_still_opens_ready_window(harness):
 
 def test_watch_waits_briefly_for_save_state_before_exiting(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=0,
+    )
 
     def populate_state_then_transcript():
         time.sleep(0.03)
@@ -162,7 +258,7 @@ def test_watch_waits_briefly_for_save_state_before_exiting(harness):
     worker = threading.Thread(target=populate_state_then_transcript)
     worker.start()
     proc = harness.popen("route", "fn-watch", "watch")
-    stdout, stderr = proc.communicate(timeout=2)
+    stdout, stderr = proc.communicate(timeout=3)
     worker.join(timeout=1)
 
     assert proc.returncode == 0, (stdout, stderr)
@@ -377,7 +473,7 @@ def test_save_reuses_existing_hud_daemon_without_restart(harness):
     )
 
     harness.run("save")
-    daemon_calls = [call for call in _warmup_hud_calls(harness) if call.startswith("--daemon ")]
+    daemon_calls = [call for call in _wait_for_hud_warmup(harness, timeout=3.0) if call.startswith("--daemon ")]
     first_daemon_pid = harness.read_state("send-window-hud.pid")
 
     harness.run("save")

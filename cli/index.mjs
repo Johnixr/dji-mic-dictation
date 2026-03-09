@@ -34,6 +34,19 @@ import { buildInstallProfilePromptPlan } from './lib/install-profile-plan.mjs';
 import { detectPermissions } from './lib/permissions.mjs';
 import { createRuntime } from './lib/runtime.mjs';
 import { listSystemSounds } from './lib/sounds.mjs';
+import {
+	detectWakewordUiLanguage,
+	doctorWakeword,
+	formatWakewordSetupIntro,
+	listenWakeword,
+	loadWakewordConfig,
+	recordWakewordSamples,
+	setupWakeword,
+	startWakewordListener,
+	stopWakewordListener,
+	trainWakeword,
+	wakewordListenerStatus,
+} from './lib/wakeword.mjs';
 
 const execFile = promisify(execFileCallback);
 
@@ -59,10 +72,22 @@ Commands:
   doctor       Diagnose the current setup and report what is missing
   config       Update audio/overlay preferences
   uninstall    Remove installed script/config/Karabiner entries
+  wakeword     Manage wake-word enrollment, training, and diagnostics
+               setup  (default) collect samples + refresh calibration
+               record            collect or top up personal samples
+               train             refresh calibration from saved samples
+               doctor            inspect sample readiness and next step
+               start             launch the background wake-word listener
+               stop              stop the background wake-word listener
+               status            report listener pid/log state
+               listen            run the listener in the foreground
 
 Options:
   --yes                  Skip confirmation prompts where possible
   --trigger-mode <mode>  Trigger mode: keyboard | keyboard+dji
+  --cue <text>           Wake cue label to enroll or train
+  --phrase <text>        Backward-compatible alias for --cue
+  --cancel-cue <text>    Cancel cue label for escape/reset
   --sound on|off         Enable or disable all notification sounds
   --preconfirm-sound <name>
                          Preconfirm sound name from /System/Library/Sounds, or off
@@ -85,6 +110,9 @@ function parseArgs(argv) {
 	}
 
 	const flags = {};
+	if (command === 'wakeword' && args[0] && !args[0].startsWith('-')) {
+		flags.wakewordSubcommand = args.shift();
+	}
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
 		switch (arg) {
@@ -114,6 +142,13 @@ function parseArgs(argv) {
 				break;
 			case '--trigger-mode':
 				flags.triggerMode = args[++index];
+				break;
+			case '--cue':
+			case '--phrase':
+				flags.phrase = args[++index];
+				break;
+			case '--cancel-cue':
+				flags.cancelPhrase = args[++index];
 				break;
 			case '--preconfirm-sound':
 				flags.preconfirmSoundName = args[++index];
@@ -281,6 +316,38 @@ async function collectInteractiveConfig(runtime, overrides = {}) {
 	};
 }
 
+async function collectInteractiveWakewordPhrase(initialValue = '') {
+	return askTextPrompt(
+		'Wake cue label',
+		initialValue,
+		(value) => {
+			if (!value?.trim()) {
+				return 'Wake cue label is required.';
+			}
+			if (value.trim().length > 80) {
+				return 'Keep the wake cue label under 80 characters.';
+			}
+			return undefined;
+		},
+	);
+}
+
+async function collectInteractiveOptionalWakewordPhrase(initialValue = '') {
+	return askTextPrompt(
+		'Cancel cue label',
+		initialValue,
+		(value) => {
+			if (!value?.trim()) {
+				return 'Cancel cue label is required.';
+			}
+			if (value.trim().length > 80) {
+				return 'Keep the cancel cue label under 80 characters.';
+			}
+			return undefined;
+		},
+	);
+}
+
 function formatSoundSetting(soundName) {
 	return soundName ? soundName : 'off';
 }
@@ -404,6 +471,26 @@ function formatDoctorReport(report) {
 	if (report.permissions?.status) {
 		lines.push(`permissions: ${report.permissions.status}`);
 	}
+	return lines.join('\n');
+}
+
+function formatWakewordDoctorReport(report) {
+	const lines = [
+		`cue label: ${report.phrase || 'not set'}`,
+		`cancel cue: ${report.cancelPhrase || 'off'}`,
+		`backend: ${report.backendEngine} (${report.backendMode})`,
+		`positive samples: ${report.positiveSampleCount}`,
+		`cancel samples: ${report.cancelSampleCount || 0}`,
+		`negative samples: ${report.negativeSampleCount}`,
+		`training ready: ${report.trainingReady ? 'yes' : 'no'}`,
+		`listener running: ${report.listenerRunning ? 'yes' : 'no'}`,
+		`listener pid: ${report.listenerPid || '-'}`,
+		`listener log: ${report.listenerLogPath}`,
+		`calibration file: ${report.calibrationExists ? 'present' : 'missing'}`,
+		`last recorded: ${report.lastRecordedAt || 'never'}`,
+		`last trained: ${report.lastTrainedAt || 'never'}`,
+		`next step: ${report.nextStep}`,
+	];
 	return lines.join('\n');
 }
 
@@ -571,6 +658,18 @@ async function collectInteractiveProfileOptions(runtime) {
 		},
 		reusedProfileName: null,
 	};
+}
+
+function createWakewordProgress(interactive) {
+	return interactive
+		? (event) => {
+			if (event.type === 'phase') {
+				note(event.message, event.phaseLabel || 'Wake-cue step');
+			} else if (event.type === 'retry') {
+				note(event.message, 'Retrying sample');
+			}
+		}
+		: () => {};
 }
 
 async function brewInstallKarabiner(showUi) {
@@ -780,6 +879,93 @@ async function retryableInstall(runtime, flags, interactive) {
 	}
 }
 
+async function runInstallWakewordSetup(runtime, flags, interactive) {
+	if (!interactive) {
+		return null;
+	}
+	const uiLanguage = await detectWakewordUiLanguage(runtime);
+	const currentConfig = await loadWakewordConfig(runtime);
+	const phrase = flags.phrase || (interactive ? await collectInteractiveWakewordPhrase(currentConfig.phrase || '') : null);
+	const cancelPhrase = flags.cancelPhrase ?? (interactive ? await collectInteractiveOptionalWakewordPhrase(currentConfig.cancelPhrase || '') : '');
+	if (!phrase || !cancelPhrase) {
+		return null;
+	}
+	note(formatWakewordSetupIntro(uiLanguage, true), uiLanguage === 'zh' ? '提示音录制' : 'Wake-cue setup');
+	return setupWakeword(runtime, {
+		phrase,
+		cancelPhrase,
+		progress: createWakewordProgress(interactive),
+	});
+}
+
+async function runWakewordCommand(runtime, flags, interactive) {
+	const subcommand = flags.wakewordSubcommand || 'setup';
+	const progress = createWakewordProgress(interactive);
+
+	switch (subcommand) {
+		case 'setup': {
+			const currentConfig = interactive ? await loadWakewordConfig(runtime) : null;
+			const phrase = flags.phrase || (interactive ? await collectInteractiveWakewordPhrase(currentConfig?.phrase || '') : null);
+			const cancelPhrase = flags.cancelPhrase ?? (interactive ? await collectInteractiveOptionalWakewordPhrase(currentConfig?.cancelPhrase || '') : '');
+			if (!phrase) {
+				throw new Error('Wake cue label is required. Pass --cue when running non-interactively.');
+			}
+			if (interactive) {
+				const uiLanguage = await detectWakewordUiLanguage(runtime);
+				note(formatWakewordSetupIntro(uiLanguage, Boolean(cancelPhrase)), uiLanguage === 'zh' ? '提示音录制' : 'Wake-cue setup');
+			}
+			return {
+				subcommand,
+				...(await setupWakeword(runtime, { phrase, cancelPhrase, progress })),
+			};
+		}
+		case 'record': {
+			const currentConfig = interactive ? await loadWakewordConfig(runtime) : null;
+			const phrase = flags.phrase || (interactive ? await collectInteractiveWakewordPhrase(currentConfig?.phrase || '') : null);
+			const cancelPhrase = flags.cancelPhrase ?? (interactive ? await collectInteractiveOptionalWakewordPhrase(currentConfig?.cancelPhrase || '') : '');
+			if (!phrase) {
+				throw new Error('Wake cue label is required. Pass --cue when running non-interactively.');
+			}
+			return {
+				subcommand,
+				...(await recordWakewordSamples(runtime, { phrase, cancelPhrase, progress })),
+			};
+		}
+		case 'train':
+			return {
+				subcommand,
+				...(await trainWakeword(runtime)),
+			};
+		case 'doctor':
+			return {
+				subcommand,
+				...(await doctorWakeword(runtime)),
+			};
+		case 'start':
+			return {
+				subcommand,
+				...(await startWakewordListener(runtime)),
+			};
+		case 'stop':
+			return {
+				subcommand,
+				...(await stopWakewordListener(runtime)),
+			};
+		case 'status':
+			return {
+				subcommand,
+				...(await wakewordListenerStatus(runtime)),
+			};
+		case 'listen':
+			return {
+				subcommand,
+				...(await listenWakeword(runtime)),
+			};
+		default:
+			throw new Error(`Unknown wakeword command: ${subcommand}`);
+	}
+}
+
 async function run() {
 	const runtime = createRuntime();
 	const { command, flags } = parseArgs(process.argv.slice(2));
@@ -806,6 +992,9 @@ async function run() {
 		switch (command) {
 			case 'install':
 				result = await retryableInstall(runtime, flags, interactive);
+				if (interactive) {
+					result.wakewordSetup = await runInstallWakewordSetup(runtime, flags, interactive);
+				}
 				break;
 			case 'update': {
 					const s = createProgress(interactive);
@@ -850,6 +1039,9 @@ async function run() {
 				result = await uninstall(runtime);
 				break;
 			}
+			case 'wakeword':
+				result = await runWakewordCommand(runtime, flags, interactive);
+				break;
 			default:
 				throw new Error(`Unknown command: ${command}`);
 		}
@@ -870,6 +1062,60 @@ async function run() {
 
 	if (command === 'doctor') {
 		note(formatDoctorReport(result), 'Doctor summary');
+	} else if (command === 'wakeword' && result.subcommand === 'doctor') {
+		note(formatWakewordDoctorReport(result), 'Wake-word summary');
+	} else if (command === 'wakeword' && result.subcommand === 'train') {
+		note(
+			[
+				`cue label: ${result.summary.phrase}`,
+				`cancel cue: ${result.summary.cancel_phrase || 'off'}`,
+				`positive samples: ${result.summary.positive_count}`,
+				`cancel samples: ${result.summary.cancel_count || 0}`,
+				`negative samples: ${result.summary.negative_count}`,
+				`training ready: ${result.summary.ready ? 'yes' : 'no'}`,
+			].join('\n'),
+			'Wake-cue calibration updated',
+		);
+	} else if (command === 'wakeword' && (result.subcommand === 'record' || result.subcommand === 'setup')) {
+		const trainingReady = result.train?.summary?.ready ?? false;
+		note(
+			[
+				`cue label: ${result.record?.config?.phrase || result.config?.phrase}`,
+				`cancel cue: ${result.record?.config?.cancelPhrase || result.config?.cancelPhrase || 'off'}`,
+				`positive samples: ${result.record?.config?.positiveSampleCount || result.config?.positiveSampleCount || 0}`,
+				`cancel samples: ${result.record?.config?.cancelSampleCount || result.config?.cancelSampleCount || 0}`,
+				`negative samples: ${result.record?.config?.negativeSampleCount || result.config?.negativeSampleCount || 0}`,
+				`training ready: ${trainingReady ? 'yes' : 'no'}`,
+			].join('\n'),
+			result.subcommand === 'setup' ? 'Wake-cue setup complete' : 'Wake-cue recording complete',
+		);
+	} else if (command === 'wakeword' && result.subcommand === 'start') {
+		note(
+			[
+				`cue label: ${result.phrase}`,
+				`cancel cue: ${result.cancelPhrase || 'off'}`,
+				`pid: ${result.pid}`,
+				`log: ${result.logPath}`,
+				`already running: ${result.alreadyRunning ? 'yes' : 'no'}`,
+			].join('\n'),
+			'Wake-cue listener started',
+		);
+	} else if (command === 'wakeword' && result.subcommand === 'stop') {
+		note(
+			[`stopped: ${result.stopped ? 'yes' : 'no'}`, `listener running: ${result.running ? 'yes' : 'no'}`].join('\n'),
+			'Wake-word listener stopped',
+		);
+	} else if (command === 'wakeword' && result.subcommand === 'status') {
+		note(
+			[
+				`listener running: ${result.running ? 'yes' : 'no'}`,
+				`pid: ${result.pid || '-'}`,
+				`log: ${result.logPath}`,
+			].join('\n'),
+			'Wake-cue listener status',
+		);
+	} else if (command === 'wakeword' && result.subcommand === 'listen') {
+		note([`cue label: ${result.phrase}`, `cancel cue: ${result.cancelPhrase || 'off'}`, `exit code: ${result.exitCode}`].join('\n'), 'Wake-cue listener exited');
 	} else if (command === 'config') {
 		note(
 			[
@@ -894,6 +1140,19 @@ async function run() {
 			].join('\n'),
 			command === 'install' ? 'Install complete' : 'Update complete',
 		);
+		if (command === 'install' && result.wakewordSetup) {
+			note(
+				[
+					`cue label: ${result.wakewordSetup.record.config.phrase}`,
+					`cancel cue: ${result.wakewordSetup.record.config.cancelPhrase || 'off'}`,
+					`positive samples: ${result.wakewordSetup.record.config.positiveSampleCount}`,
+					`cancel samples: ${result.wakewordSetup.record.config.cancelSampleCount}`,
+					`negative samples: ${result.wakewordSetup.record.config.negativeSampleCount}`,
+					`training ready: ${result.wakewordSetup.train.summary.ready ? 'yes' : 'no'}`,
+				].join('\n'),
+				'Wake-cue setup complete',
+			);
+		}
 	}
 
 	if (interactive) {

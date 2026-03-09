@@ -14,6 +14,8 @@ Run the installer directly:
 npx github:Johnixr/dji-mic-dictation install
 ```
 
+Interactive install now drops straight into cue enrollment: it asks for both the main cue and the cancel cue, then opens the floating recorder panel. If you prefer a single cue or want to script setup, the standalone `wakeword` commands still support omitting `--cancel-cue`.
+
 The installer checks for a connected DJI Mic Mini automatically:
 
 - if detected, it enables the optional hardware trigger on top of the keyboard workflow
@@ -26,6 +28,19 @@ npx github:Johnixr/dji-mic-dictation update
 npx github:Johnixr/dji-mic-dictation doctor
 npx github:Johnixr/dji-mic-dictation config
 npx github:Johnixr/dji-mic-dictation uninstall
+```
+
+Wake-word enrollment and calibration:
+
+```bash
+npx github:Johnixr/dji-mic-dictation wakeword --cue "double hiss"
+npx github:Johnixr/dji-mic-dictation wakeword --cue "double hiss" --cancel-cue "double puff"
+npx github:Johnixr/dji-mic-dictation wakeword record --cue "double hiss"
+npx github:Johnixr/dji-mic-dictation wakeword train
+npx github:Johnixr/dji-mic-dictation wakeword doctor
+npx github:Johnixr/dji-mic-dictation wakeword start
+npx github:Johnixr/dji-mic-dictation wakeword status
+npx github:Johnixr/dji-mic-dictation wakeword stop
 ```
 
 Use the CLI as the default path. If you want an AI assistant to help, have it call the same CLI instead of reimplementing the setup steps.
@@ -63,6 +78,12 @@ No press? → auto-reset after 4 seconds, no side effects
 ```
 
 Optional: if you enable the DJI trigger during install, the Mic Mini button mirrors the same workflow.
+
+## Wake-cue Enrollment
+
+The wake-word path is designed around personal sample collection, and now works well for non-lexical vocal cues too. It writes data into `~/.config/dji-mic-dictation/wakeword/`, uses a small floating recorder panel for sample capture, then runs a local log-mel learning backend that drives the same `save/watch/preconfirm/confirm` flow as `Fn`.
+
+Interactive `wakeword setup` now defaults to both a main cue and a cancel cue. It records quiet / clean / noisy positives for each cue, then one shared set of speech, mouth-sound, and ambient negatives that is reused for both classes. Training now applies built-in gain, light speed, time-shift, background-noise mixing, and light spec-mask augmentation to make small personal sample sets more robust. The floating panel follows the current macOS language (Chinese or English), wraps long copy, and keeps the recording loop on `Space to start` / `Space to stop`. `wakeword doctor` reports whether the current sample set is healthy enough, and `wakeword start` launches the background listener after calibration is ready.
 
 ## Prerequisites
 

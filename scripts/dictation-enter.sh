@@ -19,6 +19,8 @@ CONFIRM_WINDOW="${CONFIRM_WINDOW:-4}"
 PRECONFIRM_GRACE_INTERVAL="${PRECONFIRM_GRACE_INTERVAL:-0.02}"
 PRECONFIRM_GRACE_POLLS="${PRECONFIRM_GRACE_POLLS:-4}"
 DELIVERY_DELAY="${DELIVERY_DELAY:-0.05}"
+CANCEL_ESCAPE_DELAY="${CANCEL_ESCAPE_DELAY:-0.18}"
+WAKEWORD_REARM_DELAY="${WAKEWORD_REARM_DELAY:-0.7}"
 WATCH_POLL_INTERVAL="${WATCH_POLL_INTERVAL:-0.1}"
 WATCH_MAX_POLLS="${WATCH_MAX_POLLS:-300}"
 WATCH_STATE_READY_INTERVAL="${WATCH_STATE_READY_INTERVAL:-0.01}"
@@ -50,6 +52,8 @@ HUD_DAEMON_COMMAND_FILE="${HUD_DAEMON_COMMAND_FILE:-$STATE_DIR/send-window-hud.c
 HUD_DAEMON_READY_FILE="${HUD_DAEMON_READY_FILE:-$STATE_DIR/send-window-hud.ready}"
 HUD_DAEMON_READY_INTERVAL="${HUD_DAEMON_READY_INTERVAL:-0.01}"
 HUD_DAEMON_READY_POLLS="${HUD_DAEMON_READY_POLLS:-50}"
+FN_KEY_HELPER_SOURCE="${FN_KEY_HELPER_SOURCE:-$STATE_DIR/fn-keypress.swift}"
+FN_KEY_HELPER_BIN="${FN_KEY_HELPER_BIN:-$STATE_DIR/fn-keypress}"
 
 /bin/mkdir -p "$STATE_DIR"
 
@@ -332,6 +336,65 @@ app.run()
 SWIFT
 }
 
+write_fn_key_helper_source() {
+	local output_path="$1"
+	cat >"$output_path" <<'SWIFT'
+import ApplicationServices
+import Foundation
+
+let source = CGEventSource(stateID: .hidSystemState)
+guard
+	let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 63, keyDown: true),
+	let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 63, keyDown: false)
+else {
+	fputs("failed to create fn key events\n", stderr)
+	exit(1)
+}
+
+keyDown.post(tap: .cghidEventTap)
+usleep(30000)
+keyUp.post(tap: .cghidEventTap)
+SWIFT
+}
+
+ensure_fn_key_helper() {
+	if [ -x "$FN_KEY_HELPER_BIN" ]; then
+		return 0
+	fi
+	[ -n "$SWIFTC_BIN" ] || {
+		log "wakeword fn helper compile skipped: swiftc_missing"
+		return 1
+	}
+	local tmp_source
+	tmp_source="$STATE_DIR/fn-keypress.$$.swift.tmp"
+	write_fn_key_helper_source "$tmp_source"
+	if [ ! -f "$FN_KEY_HELPER_SOURCE" ] || ! cmp -s "$tmp_source" "$FN_KEY_HELPER_SOURCE"; then
+		/bin/mv "$tmp_source" "$FN_KEY_HELPER_SOURCE"
+	else
+		/bin/rm -f "$tmp_source"
+	fi
+	local tmp_bin
+	tmp_bin="$STATE_DIR/fn-keypress.$$.tmp"
+	"$SWIFTC_BIN" "$FN_KEY_HELPER_SOURCE" -o "$tmp_bin" >/dev/null 2>&1 || {
+		log "wakeword fn helper compile failed"
+		/bin/rm -f "$tmp_bin" "$FN_KEY_HELPER_BIN"
+		return 1
+	}
+	/bin/chmod +x "$tmp_bin"
+	/bin/mv "$tmp_bin" "$FN_KEY_HELPER_BIN"
+	[ -x "$FN_KEY_HELPER_BIN" ]
+}
+
+emit_fn_keypress() {
+	ensure_fn_key_helper || return 1
+	"$FN_KEY_HELPER_BIN" >/dev/null 2>&1 || {
+		log "wakeword fn keypress failed"
+		return 1
+	}
+	log "wakeword fn keypress emitted"
+	return 0
+}
+
 ensure_send_window_hud_binary() {
 	[ -n "$SWIFTC_BIN" ] || {
 		log "hud compile skipped: swiftc_missing"
@@ -376,7 +439,7 @@ stop_send_window_hud_daemon() {
 start_send_window_hud_daemon() {
 	[ -x "$HUD_BIN" ] || return 1
 	stop_send_window_hud_daemon
-	"$HUD_BIN" --daemon "$HUD_DAEMON_COMMAND_FILE" "$HUD_DAEMON_READY_FILE" >/dev/null 2>&1 &
+	/usr/bin/nohup "$HUD_BIN" --daemon "$HUD_DAEMON_COMMAND_FILE" "$HUD_DAEMON_READY_FILE" >/dev/null 2>&1 &
 	write_path_file "$HUD_DAEMON_PID_FILE" "$!"
 	if ! wait_for_path "$HUD_DAEMON_READY_FILE"; then
 		stop_send_window_hud_daemon
@@ -467,6 +530,10 @@ log() { /usr/bin/printf '%s %s\n' "$(timestamp)" "$*" >>"$LOG"; }
 read_file() { /bin/cat "$STATE_DIR/$1" 2>/dev/null; }
 write_file() { /usr/bin/printf '%s' "$2" >"$STATE_DIR/$1"; }
 write_path_file() { /usr/bin/printf '%s' "$2" >"$1"; }
+current_workflow_state() { read_file workflow_state; }
+set_workflow_state() { write_file workflow_state "$1"; }
+current_session_origin() { read_file session_origin; }
+set_session_origin() { write_file session_origin "$1"; }
 
 wait_for_path() {
 	local path="$1"
@@ -506,7 +573,7 @@ current_session_id() { read_file session_id; }
 
 session_is_current() {
 	local expected_session_id="$1"
-	[ -n "$expected_session_id" ] || return 1
+	[ -n "$expected_session_id" ] || return 0
 	[ "$(current_session_id)" = "$expected_session_id" ]
 }
 
@@ -561,7 +628,8 @@ cleanup() {
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
-	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,window_deadline}
+	set_workflow_state idle
+	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,session_origin,window_deadline,wakeword_arm_until}
 }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
@@ -572,6 +640,7 @@ clear_watch_state() {
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
+	set_workflow_state idle
 	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
 }
 
@@ -615,6 +684,16 @@ sleep_until_deadline() {
 	if awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; then
 		/bin/sleep "$remaining"
 	fi
+}
+
+wakeword_actions_are_armed() {
+	local deadline
+	deadline="$(read_file wakeword_arm_until)"
+	[ -z "$deadline" ] && return 0
+	if deadline_has_remaining "$deadline"; then
+		return 1
+	fi
+	return 0
 }
 
 open_send_window() {
@@ -675,6 +754,7 @@ enter_ready_window() {
 		expire_send_window "$mode" 0 "$expected_session_id"
 		return
 	fi
+	set_workflow_state ready_to_send
 	set_vars '{"dji_watching":0,"dji_ready_to_send":1}'
 	log "watch ${mode} content_settled (${polls} polls ~$((polls / 10))s grace_polls=${grace_polls}) remaining=${remaining_window}s"
 	sleep_until_deadline "$deadline"
@@ -748,6 +828,17 @@ gui_send_enter() {
 	log "gui_send_enter: $bundle"
 }
 
+gui_send_escape() {
+	local bundle
+	bundle="$("$OSASCRIPT_BIN" -e \
+		'tell application "System Events"
+			set bid to bundle identifier of first application process whose frontmost is true
+			key code 53
+			return bid
+		end tell' 2>/dev/null)"
+	log "gui_send_escape: $bundle"
+}
+
 transcript_ready_since_save() {
 	[ -f "$STATE_DIR/save_ts" ] || return 1
 	local anchor_rowid
@@ -783,12 +874,106 @@ send_current_mode_enter() {
 	return 1
 }
 
+send_current_mode_escape() {
+	local source="$1"
+	local mode
+	local pane
+	mode="$(read_file mode)"
+	if [ "$mode" = "tmux" ]; then
+		pane="$(read_file pane_id)"
+		if [ -n "$pane" ]; then
+			$TMUX_BIN send-keys -t "$pane" Escape 2>/dev/null
+			log "$source tmux send_escape pane=${pane}"
+			return 0
+		fi
+		log "$source tmux no_pane"
+		return 1
+	elif [ "$mode" = "gui" ]; then
+		gui_send_escape
+		log "$source gui send_escape"
+		return 0
+	fi
+	log "$source unknown mode"
+	return 1
+}
+
 if [ "$1" = "route" ]; then
 	branch="$2"
 	action="$3"
 	shift 3
 	log "branch_hit $branch"
 	set -- "$action" "$@"
+fi
+
+if [ "$1" = "wakeword-toggle" ]; then
+	current_state="$(current_workflow_state)"
+	[ -n "$current_state" ] || current_state="idle"
+	log "wakeword toggle state=${current_state}"
+	case "$current_state" in
+	ready_to_send)
+		set -- confirm
+		;;
+	watching)
+		set -- preconfirm
+		;;
+	dictation_active)
+		if ! wakeword_actions_are_armed; then
+			log "wakeword toggle ignored state=dictation_active reason=arm_window"
+			exit 0
+		fi
+		if ! emit_fn_keypress; then
+			exit 1
+		fi
+		set_vars '{"dji_dictation_active":0,"dji_watching":1,"dji_ready_to_send":0}'
+		set_workflow_state watching
+		"$0" route wakeword-open-window open-window >/dev/null 2>&1
+		/usr/bin/nohup "$0" route wakeword-watch watch >/dev/null 2>&1 &
+		log "wakeword toggle stop_watch"
+		exit 0
+		;;
+	*)
+		SESSION_ORIGIN_OVERRIDE="wakeword"
+		if ! emit_fn_keypress; then
+			exit 1
+		fi
+		set_vars '{"dji_dictation_active":1,"dji_ready_to_send":0,"dji_watching":0}'
+		log "wakeword toggle start"
+		set -- save
+		;;
+	esac
+fi
+
+if [ "$1" = "wakeword-cancel" ]; then
+	current_state="$(current_workflow_state)"
+	[ -n "$current_state" ] || current_state="idle"
+	log "wakeword cancel state=${current_state}"
+	case "$current_state" in
+	ready_to_send | watching)
+		kill_old_watcher
+		send_current_mode_escape wakeword_cancel >/dev/null 2>&1 || true
+		set_vars '{"dji_dictation_active":0,"dji_watching":0,"dji_ready_to_send":0}'
+		cleanup
+		exit 0
+		;;
+	dictation_active)
+		if ! wakeword_actions_are_armed; then
+			log "wakeword cancel ignored state=dictation_active reason=arm_window"
+			exit 0
+		fi
+		emit_fn_keypress >/dev/null 2>&1 || true
+		if awk -v delay="$CANCEL_ESCAPE_DELAY" 'BEGIN { exit !(delay > 0) }'; then
+			/bin/sleep "$CANCEL_ESCAPE_DELAY"
+		fi
+		send_current_mode_escape wakeword_cancel >/dev/null 2>&1 || true
+		log "wakeword cancel stop_then_escape delay=${CANCEL_ESCAPE_DELAY}s"
+		set_vars '{"dji_dictation_active":0,"dji_watching":0,"dji_ready_to_send":0}'
+		cleanup
+		exit 0
+		;;
+	*)
+		exit 0
+		;;
+	esac
 fi
 
 case "$1" in
@@ -803,10 +988,18 @@ save)
 	anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
 	session_id="$(generate_session_id)"
 	[ -n "$session_id" ] || session_id="$$-$(/bin/date +%s)"
+	session_origin="${SESSION_ORIGIN_OVERRIDE:-manual}"
+	[ -n "$session_origin" ] || session_origin="manual"
 	write_file save_ts "$save_ts"
 	write_file db_anchor_rowid "$anchor_rowid"
 	write_file db_anchor_updated_at "$anchor_updated_at"
 	write_file session_id "$session_id"
+	set_session_origin "$session_origin"
+	if awk -v delay="$WAKEWORD_REARM_DELAY" 'BEGIN { exit !(delay > 0) }'; then
+		write_file wakeword_arm_until "$(window_deadline_timestamp "$WAKEWORD_REARM_DELAY")"
+	else
+		/bin/rm -f "$STATE_DIR/wakeword_arm_until"
+	fi
 
 	front_bundle="$("$OSASCRIPT_BIN" -e \
 		'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
@@ -827,11 +1020,12 @@ save)
 	if [ -n "$pane" ]; then
 		write_file mode tmux
 		write_file pane_id "$pane"
-		log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
+		log "save mode=tmux origin=${session_origin} pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
 	else
 		write_file mode gui
-		log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
+		log "save mode=gui origin=${session_origin} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
 	fi
+	set_workflow_state dictation_active
 	prepare_send_window_hud_if_enabled
 	;;
 
@@ -844,6 +1038,7 @@ watch)
 
 	mode="$(wait_for_state_value mode)"
 	write_file watcher.pid "$$"
+	set_workflow_state watching
 
 	if [ "$mode" = "tmux" ]; then
 		pane="$(wait_for_state_value pane_id)"

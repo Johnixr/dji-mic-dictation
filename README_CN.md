@@ -14,6 +14,8 @@
 npx github:Johnixr/dji-mic-dictation install
 ```
 
+交互式 `install` 现在会在安装完成后直接进入提示音录制：默认同时要求主提示音和取消提示音，然后立刻弹出浮窗开始录样。如果你只想用单 cue，或者要走脚本化流程，独立的 `wakeword` 命令仍然支持不传 `--cancel-cue`。
+
 安装器会自动检查是否接了 DJI Mic Mini：
 
 - 如果检测到了，就会在 keyboard workflow 之上自动启用可选的硬件触发器
@@ -26,6 +28,19 @@ npx github:Johnixr/dji-mic-dictation update
 npx github:Johnixr/dji-mic-dictation doctor
 npx github:Johnixr/dji-mic-dictation config
 npx github:Johnixr/dji-mic-dictation uninstall
+```
+
+唤醒词录音与校准：
+
+```bash
+npx github:Johnixr/dji-mic-dictation wakeword --cue "轻嘶两下"
+npx github:Johnixr/dji-mic-dictation wakeword --cue "轻嘶两下" --cancel-cue "轻噗一下"
+npx github:Johnixr/dji-mic-dictation wakeword record --cue "轻嘶两下"
+npx github:Johnixr/dji-mic-dictation wakeword train
+npx github:Johnixr/dji-mic-dictation wakeword doctor
+npx github:Johnixr/dji-mic-dictation wakeword start
+npx github:Johnixr/dji-mic-dictation wakeword status
+npx github:Johnixr/dji-mic-dictation wakeword stop
 ```
 
 默认走 CLI。AI 助手如果要帮你配置，也应该调用这套 CLI，而不是自己重新拼安装步骤。
@@ -63,6 +78,12 @@ Fn 第 3 下 → 发送 / Enter 到当前 App → AI 开始干活
 ```
 
 如果在安装时启用了 DJI 触发器，那么 Mic Mini 按钮会镜像这套同样的流程。
+
+## 唤醒 cue 录样
+
+唤醒词这条路径单独围绕“个人样本采集”设计，现在也适合非文字的 vocal cue。样本会写到 `~/.config/dji-mic-dictation/wakeword/`，录音时会弹出一个很小的浮窗，提供录音状态和时间进度；训练后会启动一个本地 log-mel 学习型 listener，直接驱动现有 `save/watch/preconfirm/confirm` 状态机。
+
+交互式 `wakeword setup` 现在默认同时录主提示音和取消提示音。两套 cue 各录轻声 / 干净 / 带噪声正样本，但无关说话声、其他口腔声、环境静音这三类负样本只录一套，会被两套 cue 共用。训练阶段会自动做增益、轻微变速、时移、背景噪声混合和轻量 spec-mask 增广，提升少样本下的鲁棒性。浮窗会根据当前 macOS 语言切成中文或英文，并且支持英文长文案换行；整个录音交互保持 `Space 开始 / Space 结束`。换了房间、麦克风或者噪声条件后，用 `wakeword doctor` 看是否需要补录和重新校准；校准完成后用 `wakeword start` 启动后台监听。
 
 ## 前置条件
 
