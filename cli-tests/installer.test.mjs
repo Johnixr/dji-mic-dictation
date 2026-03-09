@@ -9,6 +9,11 @@ import { promisify } from 'node:util';
 import { doctor, install, uninstall, update } from '../cli/lib/actions.mjs';
 import { loadConfig } from '../cli/lib/config.mjs';
 import { buildInstallProfilePromptPlan } from '../cli/lib/install-profile-plan.mjs';
+import {
+	filterInstallPermissionReport,
+	getBlockingPermissionIssues,
+	getInstallPermissionReminderIssues,
+} from '../cli/lib/install-permissions.mjs';
 import { MANAGED_DEVICE } from '../cli/lib/karabiner.mjs';
 import { createRuntime } from '../cli/lib/runtime.mjs';
 import { listSystemSounds } from '../cli/lib/sounds.mjs';
@@ -511,11 +516,11 @@ test('CLI config command supports non-interactive JSON output', async () => {
 	assert.match(configText, /DJI_ENABLE_READY_HUD=0/u);
 });
 
-test('CLI install --json preserves permission report when Dictation is disabled', async () => {
+test('CLI install --json omits dictation and input monitoring permission items', async () => {
 	const fixture = await createFixture();
 	fixture.env.DJI_PERMISSION_CHECK_JSON = JSON.stringify({
 		items: [
-			{ key: 'karabinerInputMonitoring', label: 'Karabiner input monitoring', status: 'granted' },
+			{ key: 'karabinerInputMonitoring', label: 'Karabiner input monitoring', status: 'denied' },
 			{ key: 'accessibilityCurrentSession', label: 'Current session accessibility', status: 'granted' },
 			{ key: 'postEventCurrentSession', label: 'Current session event posting', status: 'granted' },
 			{ key: 'dictation', label: 'macOS Dictation', status: 'disabled' },
@@ -529,8 +534,9 @@ test('CLI install --json preserves permission report when Dictation is disabled'
 	);
 	const payload = JSON.parse(stdout);
 	assert.equal(payload.ok, true);
-	assert.equal(payload.result.permissions.status, 'action_required');
-	assert.equal(payload.result.permissions.items.find((item) => item.key === 'dictation')?.status, 'disabled');
+	assert.equal(payload.result.permissions.status, 'ok');
+	assert.equal(payload.result.permissions.items.find((item) => item.key === 'dictation'), undefined);
+	assert.equal(payload.result.permissions.items.find((item) => item.key === 'karabinerInputMonitoring'), undefined);
 });
 
 test('CLI config command supports setting preconfirm sound independently', async () => {
@@ -572,6 +578,24 @@ test('CLI config command supports setting review window independently', async ()
 	assert.equal(payload.result.reviewWindowSeconds, 4.5);
 	const configText = await fs.readFile(fixture.runtime.configFilePath, 'utf-8');
 	assert.match(configText, /DJI_REVIEW_WINDOW_SECONDS=4\.5/u);
+});
+
+test('install permission gating ignores dictation and input monitoring', () => {
+	const report = {
+		status: 'action_required',
+		items: [
+			{ key: 'karabinerInputMonitoring', status: 'denied' },
+			{ key: 'dictation', status: 'disabled' },
+			{ key: 'accessibilityCurrentSession', status: 'denied' },
+		],
+	};
+
+	assert.deepEqual(getBlockingPermissionIssues(report).map((item) => item.key), ['accessibilityCurrentSession']);
+	assert.deepEqual(getInstallPermissionReminderIssues(report).map((item) => item.key), ['accessibilityCurrentSession']);
+	assert.deepEqual(filterInstallPermissionReport(report), {
+		status: 'action_required',
+		items: [{ key: 'accessibilityCurrentSession', status: 'denied' }],
+	});
 });
 
 test('CLI config --sound on restores default preconfirm sound after --sound off', async () => {

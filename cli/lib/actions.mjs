@@ -21,6 +21,7 @@ import {
 	writeKarabinerConfig,
 } from './karabiner.mjs';
 import { detectPermissions } from './permissions.mjs';
+import { filterInstallPermissionReport } from './install-permissions.mjs';
 
 const execFile = promisify(execFileCallback);
 const MANIFEST_VERSION = 1;
@@ -279,7 +280,7 @@ async function syncInstallation(runtime, { profileOptions = {}, configOverrides 
 		updatedAt: new Date().toISOString(),
 	};
 	await writeManifest(runtime, manifest);
-	const permissions = await detectPermissions(runtime);
+	const permissions = filterInstallPermissionReport(await detectPermissions(runtime));
 
 	return {
 		config: nextConfig,
