@@ -141,6 +141,7 @@ test('install auto-enables the optional DJI trigger when the device is connected
 		audioFeedbackEnabled: false,
 		preconfirmSoundName: 'Sosumi',
 		readyOverlayEnabled: false,
+		reviewWindowSeconds: 3,
 	});
 
 	const installedScript = await fs.readFile(fixture.runtime.scriptTargetPath, 'utf-8');
@@ -282,6 +283,7 @@ test('update refreshes manifest version and preserves config', async () => {
 		audioFeedbackEnabled: true,
 		preconfirmSoundName: 'Sosumi',
 		readyOverlayEnabled: true,
+		reviewWindowSeconds: 3,
 	});
 
 	const karabinerConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
@@ -555,6 +557,27 @@ test('CLI config command supports setting preconfirm sound independently', async
 	assert.equal(payload.command, 'config');
 	assert.equal(payload.result.audioFeedbackEnabled, true);
 	assert.equal(payload.result.preconfirmSoundName, 'Frog');
+});
+
+test('CLI config command supports setting review window independently', async () => {
+	const fixture = await createFixture();
+	const { stdout } = await execFileAsync(
+		process.execPath,
+		[
+			path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'),
+			'config',
+			'--review-window',
+			'4.5',
+			'--json',
+		],
+		{ env: fixture.env },
+	);
+	const payload = JSON.parse(stdout);
+	assert.equal(payload.ok, true);
+	assert.equal(payload.command, 'config');
+	assert.equal(payload.result.reviewWindowSeconds, 4.5);
+	const configText = await fs.readFile(fixture.runtime.configFilePath, 'utf-8');
+	assert.match(configText, /DJI_REVIEW_WINDOW_SECONDS=4\.5/u);
 });
 
 test('install permission gating ignores dictation and input monitoring', () => {

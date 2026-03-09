@@ -65,6 +65,7 @@ Options:
   --preconfirm-sound <name>
                          Preconfirm sound name from /System/Library/Sounds, or off
   --ready-overlay on|off Enable or disable the ready-to-send countdown overlay
+  --review-window <sec>  Review time after transcript appears before auto-send expires
   --profile <name>       Target Karabiner profile name
   --clone-profile-from <name>
                          Clone an existing Karabiner profile before installing
@@ -118,6 +119,9 @@ function parseArgs(argv) {
 				break;
 			case '--ready-overlay':
 				flags.readyOverlay = args[++index];
+				break;
+			case '--review-window':
+				flags.reviewWindow = args[++index];
 				break;
 			default:
 				throw new Error(`Unknown option: ${arg}`);
@@ -197,10 +201,22 @@ function parseToggle(value, key) {
 	throw new Error(`Invalid value for ${key}: ${value}`);
 }
 
+function parsePositiveNumberFlag(value, key) {
+	if (value == null) {
+		return undefined;
+	}
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		throw new Error(`Invalid value for ${key}: ${value}`);
+	}
+	return parsed;
+}
+
 function buildConfigOverrides(flags) {
 	const overrides = {};
 	const audioFeedbackEnabled = parseToggle(flags.sound, '--sound');
 	const readyOverlayEnabled = parseToggle(flags.readyOverlay, '--ready-overlay');
+	const reviewWindowSeconds = parsePositiveNumberFlag(flags.reviewWindow, '--review-window');
 	if (audioFeedbackEnabled === false) {
 		overrides.audioFeedbackEnabled = audioFeedbackEnabled;
 		overrides.preconfirmSoundName = '';
@@ -215,6 +231,9 @@ function buildConfigOverrides(flags) {
 	}
 	if (readyOverlayEnabled != null) {
 		overrides.readyOverlayEnabled = readyOverlayEnabled;
+	}
+	if (reviewWindowSeconds != null) {
+		overrides.reviewWindowSeconds = reviewWindowSeconds;
 	}
 	return overrides;
 }
@@ -272,10 +291,24 @@ async function collectInteractiveConfig(runtime, overrides = {}) {
 		selectableSoundOptions,
 	);
 	const readyOverlayEnabled = await askBooleanPrompt('Enable the ready-to-send countdown overlay?', currentConfig.readyOverlayEnabled);
+	const reviewWindowSeconds = Number(
+		await askTextPrompt(
+			'Review time after transcript appears (seconds)',
+			String(currentConfig.reviewWindowSeconds),
+			(value) => {
+				const parsed = Number(value);
+				if (!Number.isFinite(parsed) || parsed <= 0) {
+					return 'Enter a positive number of seconds.';
+				}
+				return undefined;
+			},
+		),
+	);
 	return {
 		audioFeedbackEnabled: preconfirmSoundName !== '',
 		preconfirmSoundName,
 		readyOverlayEnabled,
+		reviewWindowSeconds,
 	};
 }
 
@@ -859,6 +892,7 @@ async function run() {
 			[
 				`preconfirm sound: ${formatSoundSetting(result.preconfirmSoundName)}`,
 				`ready countdown overlay: ${result.readyOverlayEnabled ? 'on' : 'off'}`,
+				`review window after transcript: ${result.reviewWindowSeconds}s`,
 			].join('\n'),
 			'Configuration updated',
 		);

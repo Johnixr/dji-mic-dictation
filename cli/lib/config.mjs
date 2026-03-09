@@ -4,6 +4,7 @@ export const DEFAULT_CONFIG = Object.freeze({
 	audioFeedbackEnabled: true,
 	preconfirmSoundName: 'Sosumi',
 	readyOverlayEnabled: true,
+	reviewWindowSeconds: 3,
 });
 
 function parseBoolean(value, fallback) {
@@ -18,6 +19,17 @@ function parseBoolean(value, fallback) {
 		return false;
 	}
 	return fallback;
+}
+
+function parsePositiveNumber(value, fallback) {
+	if (value == null || value === '') {
+		return fallback;
+	}
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return fallback;
+	}
+	return parsed;
 }
 
 export function normalizeSoundName(value, fallback = DEFAULT_CONFIG.preconfirmSoundName) {
@@ -42,6 +54,7 @@ export function normalizeConfig(config = {}) {
 		audioFeedbackEnabled: parseBoolean(config.audioFeedbackEnabled, derivedAudioFeedbackEnabled),
 		preconfirmSoundName,
 		readyOverlayEnabled: parseBoolean(config.readyOverlayEnabled, DEFAULT_CONFIG.readyOverlayEnabled),
+		reviewWindowSeconds: parsePositiveNumber(config.reviewWindowSeconds, DEFAULT_CONFIG.reviewWindowSeconds),
 	};
 }
 
@@ -77,6 +90,10 @@ function serializeEnvString(value) {
 	return `'${String(value).replace(/'/gu, `'"'"'`)}'`;
 }
 
+function serializeEnvNumber(value) {
+	return String(value);
+}
+
 export async function loadConfig(runtime) {
 	try {
 		const raw = await fs.readFile(runtime.configFilePath, 'utf-8');
@@ -85,6 +102,7 @@ export async function loadConfig(runtime) {
 			audioFeedbackEnabled: env.DJI_ENABLE_AUDIO_FEEDBACK,
 			preconfirmSoundName: env.DJI_PRECONFIRM_SOUND_NAME,
 			readyOverlayEnabled: env.DJI_ENABLE_READY_HUD,
+			reviewWindowSeconds: env.DJI_REVIEW_WINDOW_SECONDS,
 		});
 	} catch (error) {
 		if (error.code === 'ENOENT') {
@@ -102,6 +120,7 @@ export async function writeConfig(runtime, config) {
 		`DJI_ENABLE_AUDIO_FEEDBACK=${serializeEnvValue(normalized.audioFeedbackEnabled)}`,
 		`DJI_PRECONFIRM_SOUND_NAME=${serializeEnvString(normalized.preconfirmSoundName)}`,
 		`DJI_ENABLE_READY_HUD=${serializeEnvValue(normalized.readyOverlayEnabled)}`,
+		`DJI_REVIEW_WINDOW_SECONDS=${serializeEnvNumber(normalized.reviewWindowSeconds)}`,
 		'',
 	].join('\n');
 	await fs.writeFile(runtime.configFilePath, content, 'utf-8');
