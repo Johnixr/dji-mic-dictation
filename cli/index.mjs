@@ -31,6 +31,10 @@ import {
 } from './lib/actions.mjs';
 import { loadConfig } from './lib/config.mjs';
 import { buildInstallProfilePromptPlan } from './lib/install-profile-plan.mjs';
+import {
+	getBlockingPermissionIssues,
+	getInstallPermissionReminderIssues,
+} from './lib/install-permissions.mjs';
 import { detectPermissions } from './lib/permissions.mjs';
 import { createRuntime } from './lib/runtime.mjs';
 import { listSystemSounds } from './lib/sounds.mjs';
@@ -38,18 +42,12 @@ import { listSystemSounds } from './lib/sounds.mjs';
 const execFile = promisify(execFileCallback);
 
 const KARABINER_APP_NAME = 'Karabiner-Elements';
-const ACCESSIBILITY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+const ACCESSIBILITY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.settings.PrivacySecurity?Privacy_Accessibility';
 const INPUT_MONITORING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent';
 const DICTATION_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.keyboard?Dictation';
 const KARABINER_READY_TIMEOUT_MS = 8000;
 const KARABINER_RECHECK_TIMEOUT_MS = 2000;
 const FILE_WAIT_INTERVAL_MS = 200;
-const INSTALL_BLOCKING_PERMISSION_KEYS = new Set([
-	'karabinerInputMonitoring',
-	'accessibilityCurrentSession',
-	'postEventCurrentSession',
-	'dictation',
-]);
 
 const HELP_TEXT = `dji-mic-dictation <command> [options]
 
@@ -350,10 +348,6 @@ async function openSettingsPanel(url) {
 	}
 }
 
-function isPermissionSatisfied(status) {
-	return ['granted', 'enabled', 'ok'].includes(status);
-}
-
 function formatPermissionAction(item) {
 	switch (item.key) {
 		case 'karabinerInputMonitoring':
@@ -379,7 +373,7 @@ function printPermissionsReminder(permissions) {
 	if (!permissions || permissions.status === 'ok') {
 		return;
 	}
-	const issues = (permissions.items || []).filter((item) => !isPermissionSatisfied(item.status));
+	const issues = getInstallPermissionReminderIssues(permissions);
 	if (issues.length === 0) {
 		return;
 	}
@@ -661,16 +655,6 @@ async function ensureKarabinerInstalled(runtime, flags, interactive) {
 
 	await ensureKarabinerConfigReady(runtime, interactive);
 }
-
-function getBlockingPermissionIssues(permissions) {
-	if (!permissions || permissions.status === 'ok') {
-		return [];
-	}
-	return (permissions.items || []).filter(
-		(item) => INSTALL_BLOCKING_PERMISSION_KEYS.has(item.key) && !isPermissionSatisfied(item.status),
-	);
-}
-
 
 async function openPermissionPanels(issues) {
 	const issueKeys = new Set(issues.map((item) => item.key));
