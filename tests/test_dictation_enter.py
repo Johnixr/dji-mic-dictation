@@ -690,6 +690,56 @@ def test_confirm_plays_feedback_sound(harness):
     assert "confirm gui send_enter" in harness.log_text()
 
 
+def test_confirm_tmux_ignores_second_press_while_first_confirm_is_in_flight(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
+    harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
+    harness._write_executable(
+        "tmux",
+        f"""#!/usr/bin/env {sys.executable}
+import os
+import shlex
+import sys
+import time
+
+log = os.environ["TMUX_LOG_FILE"]
+with open(log, "a", encoding="utf-8") as fh:
+    fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+
+if len(sys.argv) > 1 and sys.argv[1] == "send-keys":
+    time.sleep(0.2)
+elif len(sys.argv) > 1 and sys.argv[1] == "list-panes":
+    sys.stdout.write(os.environ.get("FAKE_TMUX_LIST_PANES_OUTPUT", ""))
+""",
+    )
+    harness.run("save")
+
+    first_proc = harness.popen("confirm")
+    time.sleep(0.02)
+    second_proc = harness.popen("confirm")
+
+    first_stdout, first_stderr = first_proc.communicate(timeout=1)
+    second_stdout, second_stderr = second_proc.communicate(timeout=1)
+
+    assert first_proc.returncode == 0, (first_stdout, first_stderr)
+    assert second_proc.returncode == 0, (second_stdout, second_stderr)
+    send_calls = [call for call in harness.tmux_calls() if call.startswith("send-keys -t %1 Enter")]
+    assert send_calls == ["send-keys -t %1 Enter"]
+    assert "confirm ignored already_consumed" in harness.log_text()
+
+
+def test_save_resets_consumed_confirm_guard_for_next_cycle(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
+    harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
+
+    harness.run("save")
+    harness.run("confirm")
+    harness.run("save")
+    harness.run("confirm")
+
+    send_calls = [call for call in harness.tmux_calls() if call.startswith("send-keys -t %1 Enter")]
+    assert send_calls == ["send-keys -t %1 Enter", "send-keys -t %1 Enter"]
+
+
 def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_gui(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(

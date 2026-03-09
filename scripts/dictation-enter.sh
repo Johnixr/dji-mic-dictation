@@ -791,12 +791,31 @@ cleanup() {
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
 
+reset_send_consumed() {
+	/bin/rm -rf "$STATE_DIR/send_consumed.lock"
+}
+
 clear_watch_state() {
 	local expected_session_id="${1:-}"
 	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
+	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
+}
+
+consume_send_state() {
+	local source_label="$1"
+	local expected_session_id="${2:-}"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 1
+	fi
+	/bin/mkdir "$STATE_DIR/send_consumed.lock" 2>/dev/null || {
+		log "$source_label ignored already_consumed"
+		return 1
+	}
+	dismiss_ready_hud "$expected_session_id"
+	/bin/rm -f "$STATE_DIR/window_deadline" "$STATE_DIR/pending_confirm"
 	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
 }
 
@@ -1032,6 +1051,7 @@ save)
 	kill_old_watcher
 	set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 	cleanup
+	reset_send_consumed
 	write_file save_in_progress 1
 	save_ts="$(utc_timestamp_ms)"
 	[ -n "$save_ts" ] || save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
@@ -1222,8 +1242,8 @@ open-window)
 preconfirm)
 	dismiss_ready_hud
 	if transcript_ready_since_save; then
+		consume_send_state preconfirm || exit 0
 		kill_old_watcher
-		set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 		play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
 		send_current_mode_enter preconfirm
 		cleanup
@@ -1235,11 +1255,10 @@ preconfirm)
 	;;
 
 confirm)
-	dismiss_ready_hud
+	consume_send_state confirm || exit 0
 	play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
 	send_current_mode_enter confirm
 	kill_old_watcher
-	set_vars '{"dji_ready_to_send":0,"dji_watching":0}'
 	cleanup
 	;;
 esac
