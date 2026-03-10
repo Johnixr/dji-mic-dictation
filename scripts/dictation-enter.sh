@@ -804,7 +804,7 @@ clear_watch_state() {
 	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
 }
 
-consume_send_state() {
+claim_send_state() {
 	local source_label="$1"
 	local expected_session_id="${2:-}"
 	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
@@ -814,6 +814,17 @@ consume_send_state() {
 		log "$source_label ignored already_consumed"
 		return 1
 	}
+}
+
+release_send_state() {
+	/bin/rm -rf "$STATE_DIR/send_consumed.lock"
+}
+
+finalize_send_state() {
+	local expected_session_id="${1:-}"
+	if [ -n "$expected_session_id" ] && ! session_is_current "$expected_session_id"; then
+		return 0
+	fi
 	dismiss_ready_hud "$expected_session_id"
 	/bin/rm -f "$STATE_DIR/window_deadline" "$STATE_DIR/pending_confirm"
 	set_vars '{"dji_watching":0,"dji_ready_to_send":0}'
@@ -995,10 +1006,18 @@ gui_send_enter() {
 			set bid to bundle identifier of first application process whose frontmost is true
 			if bid is not "com.googlecode.iterm2" then keystroke return
 			return bid
-		end tell' 2>/dev/null)"
+		end tell' 2>/dev/null)" || {
+		local status=$?
+		log "gui_send_enter failed frontmost_lookup status=${status}"
+		return "$status"
+	}
 	if [ "$bundle" = "com.googlecode.iterm2" ]; then
 		"$OSASCRIPT_BIN" -e \
-			'tell application "iTerm2" to tell current window to tell current session to write text ""' 2>/dev/null
+			'tell application "iTerm2" to tell current window to tell current session to write text ""' 2>/dev/null || {
+			local status=$?
+			log "gui_send_enter failed iterm_write status=${status}"
+			return "$status"
+		}
 	fi
 	log "gui_send_enter: $bundle"
 }
@@ -1019,20 +1038,31 @@ send_current_mode_enter() {
 	local source="$1"
 	local mode
 	local pane
+	local status
 	mode="$(read_file mode)"
 	if [ "$mode" = "tmux" ]; then
 		pane="$(read_file pane_id)"
 		if [ -n "$pane" ]; then
 			$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
-			log "$source tmux send_enter pane=${pane}"
-			return 0
+			status=$?
+			if [ "$status" -eq 0 ]; then
+				log "$source tmux send_enter pane=${pane}"
+				return 0
+			fi
+			log "$source tmux send_failed pane=${pane} status=${status}"
+			return "$status"
 		fi
 		log "$source tmux no_pane"
 		return 1
 	elif [ "$mode" = "gui" ]; then
 		gui_send_enter
-		log "$source gui send_enter"
-		return 0
+		status=$?
+		if [ "$status" -eq 0 ]; then
+			log "$source gui send_enter"
+			return 0
+		fi
+		log "$source gui send_failed status=${status}"
+		return "$status"
 	fi
 	log "$source unknown mode"
 	return 1
@@ -1151,10 +1181,16 @@ watch)
 			if wait_for_pending_confirm; then
 				session_is_current "$watch_session_id" || exit 0
 				/bin/sleep "$DELIVERY_DELAY"
-				$TMUX_BIN send-keys -t "$pane" Enter 2>/dev/null
-				clear_watch_state "$watch_session_id"
-				log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
-				cleanup "$watch_session_id"
+				if send_current_mode_enter "watch tmux preconfirm"; then
+					finalize_send_state "$watch_session_id"
+					log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
+					cleanup "$watch_session_id"
+				else
+					send_status=$?
+					/bin/rm -f "$STATE_DIR/pending_confirm"
+					log "watch tmux preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
+					enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
+				fi
 			else
 				enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
 			fi
@@ -1208,10 +1244,16 @@ watch)
 			if wait_for_pending_confirm; then
 				session_is_current "$watch_session_id" || exit 0
 				/bin/sleep "$DELIVERY_DELAY"
-				gui_send_enter
-				clear_watch_state "$watch_session_id"
-				log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
-				cleanup "$watch_session_id"
+				if send_current_mode_enter "watch gui preconfirm"; then
+					finalize_send_state "$watch_session_id"
+					log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
+					cleanup "$watch_session_id"
+				else
+					send_status=$?
+					/bin/rm -f "$STATE_DIR/pending_confirm"
+					log "watch gui preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
+					enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
+				fi
 			else
 				enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
 			fi
@@ -1242,11 +1284,17 @@ open-window)
 preconfirm)
 	dismiss_ready_hud
 	if transcript_ready_since_save; then
-		consume_send_state preconfirm || exit 0
-		kill_old_watcher
+		claim_send_state preconfirm || exit 0
 		play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
-		send_current_mode_enter preconfirm
-		cleanup
+		if send_current_mode_enter preconfirm; then
+			finalize_send_state
+			kill_old_watcher
+			cleanup
+		else
+			send_status=$?
+			release_send_state
+			exit "$send_status"
+		fi
 	else
 		write_file pending_confirm 1
 		play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
@@ -1255,10 +1303,16 @@ preconfirm)
 	;;
 
 confirm)
-	consume_send_state confirm || exit 0
+	claim_send_state confirm || exit 0
 	play_feedback_sound "$DJI_PRECONFIRM_SOUND_NAME"
-	send_current_mode_enter confirm
-	kill_old_watcher
-	cleanup
+	if send_current_mode_enter confirm; then
+		finalize_send_state
+		kill_old_watcher
+		cleanup
+	else
+		send_status=$?
+		release_send_state
+		exit "$send_status"
+	fi
 	;;
 esac

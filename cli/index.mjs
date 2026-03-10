@@ -738,7 +738,7 @@ async function retryableInstall(runtime, flags, interactive) {
 	while (true) {
 		const s = createProgress(showUi);
 		try {
-			let profileOptions = explicitProfileOverrides || { profileStrategy: 'active' };
+			let profileOptions = explicitProfileOverrides;
 			let triggerMode = explicitTriggerMode;
 			let reusedProfileName = null;
 			let reusedTriggerMode = null;

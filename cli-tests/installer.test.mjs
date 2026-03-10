@@ -210,6 +210,39 @@ test('install reuses the previously installed profile when rerun without overrid
 	assert(!primaryProfile.complex_modifications.rules.some((rule) => rule.description === 'Fn dictation toggle + confirm/preconfirm to send Enter'));
 });
 
+test('CLI install --yes --json reuses the previously installed profile when rerun without overrides', async () => {
+	const fixture = await createFixture();
+	await install(fixture.runtime, {
+		profileOptions: {
+			profileStrategy: 'existing',
+			profileName: 'Secondary',
+		},
+	});
+
+	const karabinerConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
+	for (const profile of karabinerConfig.profiles) {
+		profile.selected = profile.name === 'Primary';
+	}
+	await fs.writeFile(fixture.karabinerConfigPath, `${JSON.stringify(karabinerConfig, null, 2)}\n`, 'utf-8');
+
+	const { stdout } = await execFileAsync(
+		process.execPath,
+		[path.join(fixture.runtime.repoRoot, 'cli', 'index.mjs'), 'install', '--yes', '--json'],
+		{ env: fixture.env },
+	);
+	const payload = JSON.parse(stdout);
+	assert.equal(payload.ok, true);
+	assert.equal(payload.result.profileName, 'Secondary');
+
+	const reconciledConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
+	const primaryProfile = reconciledConfig.profiles.find((profile) => profile.name === 'Primary');
+	const secondaryProfile = reconciledConfig.profiles.find((profile) => profile.name === 'Secondary');
+	assert.equal(primaryProfile.selected, false);
+	assert.equal(secondaryProfile.selected, true);
+	assert(secondaryProfile.complex_modifications.rules.some((rule) => rule.description === 'Fn dictation toggle + confirm/preconfirm to send Enter'));
+	assert(!primaryProfile.complex_modifications.rules.some((rule) => rule.description === 'Fn dictation toggle + confirm/preconfirm to send Enter'));
+});
+
 test('install can target an existing Karabiner profile and reconcile old managed entries', async () => {
 	const fixture = await createFixture();
 	await install(fixture.runtime, {});

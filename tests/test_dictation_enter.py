@@ -690,6 +690,84 @@ def test_confirm_plays_feedback_sound(harness):
     assert "confirm gui send_enter" in harness.log_text()
 
 
+def test_confirm_gui_returns_nonzero_and_preserves_state_when_send_fails(harness):
+    harness.write_state("mode", "gui")
+    harness.write_state("window_deadline", "9999999999")
+    ready_hud = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    harness.write_state("ready_hud.pid", str(ready_hud.pid))
+    harness._write_executable("osascript", "#!/bin/sh\nexit 7\n")
+
+    try:
+        result = harness.run("confirm", check=False)
+    finally:
+        if ready_hud.poll() is None:
+            ready_hud.kill()
+            ready_hud.wait(timeout=1)
+
+    log_text = harness.log_text()
+    assert result.returncode == 7
+    assert "confirm gui send_failed status=7" in log_text
+    assert "confirm gui send_enter" not in log_text
+    assert harness.read_state("mode") == "gui"
+    assert harness.read_state("ready_hud.pid") != ""
+    assert not (harness.state_dir / "send_consumed.lock").exists()
+
+
+def test_confirm_tmux_failure_releases_guard_and_allows_retry(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
+    harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
+    harness.run("save")
+    harness._write_executable(
+        "tmux",
+        f"""#!/usr/bin/env {sys.executable}
+import os
+import shlex
+import sys
+
+log = os.environ["TMUX_LOG_FILE"]
+with open(log, "a", encoding="utf-8") as fh:
+    fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+
+if len(sys.argv) > 1 and sys.argv[1] == "send-keys":
+    sys.exit(9)
+if len(sys.argv) > 1 and sys.argv[1] == "list-panes":
+    sys.stdout.write(os.environ.get("FAKE_TMUX_LIST_PANES_OUTPUT", ""))
+""",
+    )
+
+    failed = harness.run("confirm", check=False)
+
+    assert failed.returncode == 9
+    assert "confirm tmux send_failed pane=%1 status=9" in harness.log_text()
+    assert "confirm tmux send_enter pane=%1" not in harness.log_text()
+    assert harness.read_state("mode") == "tmux"
+    assert not (harness.state_dir / "send_consumed.lock").exists()
+
+    harness._write_executable(
+        "tmux",
+        f"""#!/usr/bin/env {sys.executable}
+import os
+import shlex
+import sys
+
+log = os.environ["TMUX_LOG_FILE"]
+with open(log, "a", encoding="utf-8") as fh:
+    fh.write(" ".join(shlex.quote(arg) for arg in sys.argv[1:]) + "\\n")
+
+if len(sys.argv) > 1 and sys.argv[1] == "list-panes":
+    sys.stdout.write(os.environ.get("FAKE_TMUX_LIST_PANES_OUTPUT", ""))
+""",
+    )
+
+    retried = harness.run("confirm")
+
+    assert retried.returncode == 0
+    send_calls = [call for call in harness.tmux_calls() if call.startswith("send-keys -t %1 Enter")]
+    assert send_calls == ["send-keys -t %1 Enter", "send-keys -t %1 Enter"]
+    assert harness.log_text().count("confirm tmux send_enter pane=%1") == 1
+    assert harness.read_state("mode") == ""
+
+
 def test_confirm_tmux_ignores_second_press_while_first_confirm_is_in_flight(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
     harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
@@ -738,6 +816,38 @@ def test_save_resets_consumed_confirm_guard_for_next_cycle(harness):
 
     send_calls = [call for call in harness.tmux_calls() if call.startswith("send-keys -t %1 Enter")]
     assert send_calls == ["send-keys -t %1 Enter", "send-keys -t %1 Enter"]
+
+
+def test_watch_gui_failed_preconfirm_send_falls_back_to_ready_window(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.2"
+    row = harness.insert_history(status="", refined_text="")
+    harness.run("save")
+    harness._write_executable("osascript", "#!/bin/sh\nexit 6\n")
+
+    def queue_preconfirm_then_publish_transcript():
+        time.sleep(0.03)
+        harness.run("preconfirm")
+        time.sleep(0.03)
+        harness.update_history(
+            row.rowid,
+            status="transcript",
+            updated_at=iso_timestamp(),
+            refined_text="retry after failed send",
+        )
+
+    worker = threading.Thread(target=queue_preconfirm_then_publish_transcript)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    assert "watch gui preconfirm_failed" in log_text
+    assert "watch gui preconfirm_send (" not in log_text
+    assert "watch gui content_settled" in log_text
+    assert "watch gui window_expired" in log_text
 
 
 def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_gui(harness):
