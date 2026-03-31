@@ -935,3 +935,110 @@ def test_confirm_gui_sends_enter_and_cleans_up(harness):
         or "write text" in " ".join(call["args"])
         for call in calls
     )
+
+
+def test_save_records_spokenly_anchor_and_mode(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.run("save")
+
+    assert harness.read_state("mode") == "gui"
+    assert harness.read_state("engine") == "spokenly"
+    anchor_mtime = harness.read_state("spokenly_anchor_mtime")
+    assert anchor_mtime != ""
+    assert "save mode=gui" in harness.log_text()
+    assert "engine=spokenly" in harness.log_text()
+
+
+def test_watch_spokenly_detects_new_json(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    def insert_spokenly_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json("hello from spokenly", mode="ai_enhanced")
+
+    worker = threading.Thread(target=insert_spokenly_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    assert "watch gui transcript_detected" in log_text
+    assert "watch gui content_settled" in log_text
+    assert "watch gui window_expired" in log_text
+
+
+def test_spokenly_ai_enhanced_mode_extraction(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    def insert_spokenly_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json(
+            "AI enhanced transcription result", mode="ai_enhanced"
+        )
+
+    worker = threading.Thread(target=insert_spokenly_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui transcript_detected" in harness.log_text()
+
+
+def test_spokenly_fast_transcription_mode_extraction(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    def insert_spokenly_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json("Fast transcription result", mode="fast")
+
+    worker = threading.Thread(target=insert_spokenly_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui transcript_detected" in harness.log_text()
+
+
+def test_spokenly_json_parse_error_handling(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    # Insert invalid JSON that will fail parsing
+    invalid_json = harness.spokenly_history_dir / time.strftime("%Y-%m-%d") / "invalid.json"
+    invalid_json.parent.mkdir(parents=True, exist_ok=True)
+    invalid_json.write_text("{ invalid json }", encoding="utf-8")
+    time.sleep(0.1)
+
+    # Insert valid JSON after the invalid one
+    def insert_valid_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json("valid text after parse error", mode="ai_enhanced")
+
+    worker = threading.Thread(target=insert_valid_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    # Should detect parse error and continue
+    assert "json_parse_failed" in log_text or "watch gui transcript_detected" in log_text

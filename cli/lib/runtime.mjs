@@ -40,6 +40,12 @@ export function createRuntime({ env = process.env } = {}) {
 		typelessDbPath:
 			env.DJI_TYPELESS_DB ||
 			path.join(homeDir, 'Library', 'Application Support', 'Typeless', 'typeless.db'),
+		spokenlyDir:
+			env.DJI_SPOKENLY_DIR ||
+			path.join(homeDir, 'Library', 'Application Support', 'Spokenly'),
+		spokenlyHistoryDir:
+			env.DJI_SPOKENLY_HISTORY_DIR ||
+			path.join(homeDir, 'Library', 'Application Support', 'Spokenly', 'History'),
 		repoRoot: REPO_ROOT,
 		scriptSourcePath: SCRIPT_SOURCE_PATH,
 		karabinerTemplatePath: KARABINER_TEMPLATE_PATH,

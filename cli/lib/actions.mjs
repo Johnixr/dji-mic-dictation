@@ -51,12 +51,24 @@ function createCommandError(message, code) {
 	return error;
 }
 
-async function assertInstallationPrerequisites(runtime) {
-	if (!(await pathExists(runtime.typelessDbPath))) {
-		throw createCommandError(
-			`Typeless DB not found at ${runtime.typelessDbPath}. Install/open Typeless first.`,
-			'TYPELESS_DB_MISSING',
-		);
+async function assertInstallationPrerequisites(runtime, engine = 'typeless') {
+	if (engine === 'spokenly') {
+		// For Spokenly, we check the History directory exists
+		const spokenlyHistoryExists = await pathExists(runtime.spokenlyHistoryDir);
+		if (!spokenlyHistoryExists) {
+			throw createCommandError(
+				`Spokenly History directory not found at ${runtime.spokenlyHistoryDir}. Install/open Spokenly first.`,
+				'SPOKENLY_HISTORY_MISSING',
+			);
+		}
+	} else {
+		// For Typeless (default), we check the DB exists
+		if (!(await pathExists(runtime.typelessDbPath))) {
+			throw createCommandError(
+				`Typeless DB not found at ${runtime.typelessDbPath}. Install/open Typeless first.`,
+				'TYPELESS_DB_MISSING',
+			);
+		}
 	}
 	if (!(await pathExists(runtime.karabinerConfigPath))) {
 		throw createCommandError(
@@ -231,6 +243,69 @@ function hasExplicitTriggerSelection(options = {}) {
 	return Boolean(options.triggerMode);
 }
 
+function hasExplicitEngineSelection(options = {}) {
+	return Boolean(options.transcriptionEngine);
+}
+
+async function checkEngineAvailability(runtime, engine) {
+	if (engine === 'spokenly') {
+		const historyExists = await pathExists(runtime.spokenlyHistoryDir);
+		return { engine: 'spokenly', historyExists };
+	} else {
+		const dbExists = await pathExists(runtime.typelessDbPath);
+		return { engine: 'typeless', dbExists };
+	}
+}
+
+async function resolveInstallTranscriptionEngine(runtime, options = {}) {
+	// Check for explicit engine selection
+	if (hasExplicitEngineSelection(options)) {
+		const normalizedEngine = normalizeTranscriptionEngine(options.transcriptionEngine);
+		if (normalizedEngine) {
+			return normalizedEngine;
+		}
+	}
+
+	// Check manifest for existing engine
+	const manifest = await readManifest(runtime);
+	if (manifest?.transcriptionEngine) {
+		return manifest.transcriptionEngine;
+	}
+
+	// Auto-detect based on availability
+	const typelessAvailable = await pathExists(runtime.typelessDbPath);
+	const spokenlyAvailable = await pathExists(runtime.spokenlyHistoryDir);
+
+	if (typelessAvailable && !spokenlyAvailable) {
+		return 'typeless';
+	} else if (spokenlyAvailable && !typelessAvailable) {
+		return 'spokenly';
+	} else if (typelessAvailable && spokenlyAvailable) {
+		// Both available - prefer Typeless for backward compatibility
+		return 'typeless';
+	} else {
+		// Neither available - throw error
+		throw createCommandError(
+			'Neither Typeless DB nor Spokenly History directory found. Install/open one first.',
+			'TRANSCRIPTION_ENGINE_MISSING',
+		);
+	}
+}
+
+function normalizeTranscriptionEngine(value) {
+	if (!value) {
+		return null;
+	}
+	const normalized = String(value).trim().toLowerCase();
+	if (normalized === 'typeless') {
+		return 'typeless';
+	}
+	if (normalized === 'spokenly') {
+		return 'spokenly';
+	}
+	throw new Error(`Unsupported transcription engine: ${value}`);
+}
+
 async function resolveInstallTriggerMode(runtime, options = {}) {
 	const explicitTriggerMode = normalizeTriggerMode(options.triggerMode);
 	if (explicitTriggerMode) {
@@ -250,13 +325,13 @@ async function resolveInstallTriggerMode(runtime, options = {}) {
 	return detectedDevice.status === 'connected' ? TRIGGER_MODE_KEYBOARD_DJI : TRIGGER_MODE_KEYBOARD;
 }
 
-async function syncInstallation(runtime, { profileOptions = {}, configOverrides = {}, installedMode, triggerMode }) {
+async function syncInstallation(runtime, { profileOptions = {}, configOverrides = {}, installedMode, triggerMode, transcriptionEngine }) {
 	const normalizedTriggerMode = normalizeTriggerMode(triggerMode) || TRIGGER_MODE_KEYBOARD;
 	const detectedDevice = await detectOptionalTriggerDevice(runtime);
 	const templateRule = await loadRuleTemplate(runtime, normalizedTriggerMode);
 	const karabinerConfig = await loadKarabinerConfig(runtime);
 	const existingConfig = await loadConfig(runtime);
-	const nextConfig = mergeConfig(existingConfig, configOverrides);
+	const nextConfig = mergeConfig(existingConfig, { ...configOverrides, transcriptionEngine });
 	const resolvedProfile = resolveTargetProfile(karabinerConfig, normalizeProfileOptions(profileOptions));
 	const { profileName: appliedProfileName } = syncManagedEntries(karabinerConfig, templateRule, resolvedProfile.profileName, {
 		includeManagedDevice: normalizedTriggerMode === TRIGGER_MODE_KEYBOARD_DJI,
@@ -275,6 +350,7 @@ async function syncInstallation(runtime, { profileOptions = {}, configOverrides 
 		profileStrategy: resolvedProfile.profileStrategy,
 		sourceProfileName: resolvedProfile.sourceProfileName,
 		triggerMode: normalizedTriggerMode,
+		transcriptionEngine,
 		scriptTargetPath: runtime.scriptTargetPath,
 		configFilePath: runtime.configFilePath,
 		updatedAt: new Date().toISOString(),
@@ -290,6 +366,7 @@ async function syncInstallation(runtime, { profileOptions = {}, configOverrides 
 		profileName: appliedProfileName,
 		profileStrategy: resolvedProfile.profileStrategy,
 		triggerMode: normalizedTriggerMode,
+		transcriptionEngine,
 		profileSwitch,
 	};
 }
@@ -300,20 +377,22 @@ export async function getKarabinerProfiles(runtime) {
 }
 
 export async function install(runtime, options = {}) {
-	await assertInstallationPrerequisites(runtime);
+	const transcriptionEngine = await resolveInstallTranscriptionEngine(runtime, options);
+	await assertInstallationPrerequisites(runtime, transcriptionEngine);
 
 	return syncInstallation(runtime, {
 		profileOptions: await resolveInstallProfileOptions(runtime, options),
 		triggerMode: await resolveInstallTriggerMode(runtime, options),
 		configOverrides: options.configOverrides,
 		installedMode: 'install',
+		transcriptionEngine,
 	});
 }
 
 export async function update(runtime, options = {}) {
-	await assertInstallationPrerequisites(runtime);
-
 	const manifest = await readManifest(runtime);
+	await assertInstallationPrerequisites(runtime, manifest?.transcriptionEngine || 'typeless');
+
 	const templateRule = await loadRuleTemplate(runtime);
 	const karabinerConfig = await loadKarabinerConfig(runtime);
 	const managedProfiles = findManagedEntries(karabinerConfig, templateRule);
@@ -334,6 +413,8 @@ export async function update(runtime, options = {}) {
 				}),
 		triggerMode:
 			hasExplicitTriggerSelection(options) ? normalizeTriggerMode(options.triggerMode) : inferTriggerMode(manifest, managedProfiles),
+		transcriptionEngine:
+			hasExplicitEngineSelection(options) ? normalizeTranscriptionEngine(options.transcriptionEngine) : manifest?.transcriptionEngine,
 		configOverrides: options.configOverrides,
 		installedMode: 'update',
 	});
@@ -378,6 +459,7 @@ export async function doctor(runtime) {
 	const karabinerConfigExists = await pathExists(runtime.karabinerConfigPath);
 	const karabinerCliExists = await pathExists(runtime.karabinerCliPath);
 	const typelessDbExists = await pathExists(runtime.typelessDbPath);
+	const spokenlyHistoryExists = await pathExists(runtime.spokenlyHistoryDir);
 	const scriptInstalled = await pathExists(runtime.scriptTargetPath);
 	const configInstalled = await pathExists(runtime.configFilePath);
 	const manifest = await readManifest(runtime);
@@ -407,6 +489,7 @@ export async function doctor(runtime) {
 	const packageVersion = runtime.packageVersion;
 	const installedVersion = manifest?.packageVersion || null;
 	const permissions = await detectPermissions(runtime);
+	const transcriptionEngine = manifest?.transcriptionEngine || null;
 
 	return {
 		packageVersion,
@@ -416,12 +499,14 @@ export async function doctor(runtime) {
 		karabinerCliExists,
 		karabinerConfigExists,
 		typelessDbExists,
+		spokenlyHistoryExists,
 		scriptInstalled,
 		configInstalled,
 		manifestExists: Boolean(manifest),
 		managedProfiles,
 		profileCurrent,
 		triggerMode,
+		transcriptionEngine,
 		connectedDevice,
 		permissions,
 	};
