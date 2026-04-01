@@ -5,6 +5,7 @@ export const DEFAULT_CONFIG = Object.freeze({
 	preconfirmSoundName: 'Sosumi',
 	readyOverlayEnabled: true,
 	reviewWindowSeconds: 3,
+	transcriptionEngine: null, // 'typeless' or 'spokenly', no default to force user choice
 });
 
 function parseBoolean(value, fallback) {
@@ -47,14 +48,21 @@ export function normalizeSoundName(value, fallback = DEFAULT_CONFIG.preconfirmSo
 	return normalized;
 }
 
+function normalizeTranscriptionEngine(value) {
+	if (value === 'typeless' || value === 'spokenly') return value;
+	return null;
+}
+
 export function normalizeConfig(config = {}) {
 	const preconfirmSoundName = normalizeSoundName(config.preconfirmSoundName, DEFAULT_CONFIG.preconfirmSoundName);
 	const derivedAudioFeedbackEnabled = preconfirmSoundName !== '';
+	const transcriptionEngine = normalizeTranscriptionEngine(config.transcriptionEngine);
 	return {
 		audioFeedbackEnabled: parseBoolean(config.audioFeedbackEnabled, derivedAudioFeedbackEnabled),
 		preconfirmSoundName,
 		readyOverlayEnabled: parseBoolean(config.readyOverlayEnabled, DEFAULT_CONFIG.readyOverlayEnabled),
 		reviewWindowSeconds: parsePositiveNumber(config.reviewWindowSeconds, DEFAULT_CONFIG.reviewWindowSeconds),
+		transcriptionEngine,
 	};
 }
 
@@ -103,6 +111,7 @@ export async function loadConfig(runtime) {
 			preconfirmSoundName: env.DJI_PRECONFIRM_SOUND_NAME,
 			readyOverlayEnabled: env.DJI_ENABLE_READY_HUD,
 			reviewWindowSeconds: env.DJI_REVIEW_WINDOW_SECONDS,
+			transcriptionEngine: env.TRANSCRIPTION_ENGINE,
 		});
 	} catch (error) {
 		if (error.code === 'ENOENT') {
@@ -115,12 +124,15 @@ export async function loadConfig(runtime) {
 export async function writeConfig(runtime, config) {
 	const normalized = normalizeConfig(config);
 	await fs.mkdir(runtime.configDir, { recursive: true });
+	const engineValue = normalized.transcriptionEngine
+		? serializeEnvString(normalized.transcriptionEngine) : '';
 	const content = [
 		'# Managed by dji-mic-dictation CLI',
 		`DJI_ENABLE_AUDIO_FEEDBACK=${serializeEnvValue(normalized.audioFeedbackEnabled)}`,
 		`DJI_PRECONFIRM_SOUND_NAME=${serializeEnvString(normalized.preconfirmSoundName)}`,
 		`DJI_ENABLE_READY_HUD=${serializeEnvValue(normalized.readyOverlayEnabled)}`,
 		`DJI_REVIEW_WINDOW_SECONDS=${serializeEnvNumber(normalized.reviewWindowSeconds)}`,
+		`TRANSCRIPTION_ENGINE=${engineValue}`,
 		'',
 	].join('\n');
 	await fs.writeFile(runtime.configFilePath, content, 'utf-8');

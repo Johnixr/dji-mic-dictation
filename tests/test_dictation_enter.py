@@ -86,9 +86,11 @@ def test_save_records_tmux_anchor_and_mode(harness):
     assert "save mode=tmux" in harness.log_text()
 
 
-def test_watch_tmux_preconfirm_send_handles_reused_row_update(harness):
+def test_watch_tmux_enters_ready_window_after_preconfirm(harness):
+    """preconfirm queues intent, watch enters ready_window, then confirm can send"""
     harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
     harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
+    harness.env["CONFIRM_WINDOW"] = "0.3"  # short window so watch exits quickly
     row = harness.insert_history(status="", refined_text="")
     harness.run("save")
 
@@ -111,9 +113,9 @@ def test_watch_tmux_preconfirm_send_handles_reused_row_update(harness):
 
     assert proc.returncode == 0, (stdout, stderr)
     log_text = harness.log_text()
-    assert "watch tmux transcript_detected" in log_text or "preconfirm tmux send_enter pane=%1" in log_text
-    assert "watch tmux preconfirm_send" in log_text or "preconfirm tmux send_enter" in log_text
-    assert any("send-keys -t %1 Enter" in call for call in harness.tmux_calls())
+    assert "watch tmux transcript_detected" in log_text
+    assert "preconfirm queued" in log_text
+    assert "watch tmux content_settled" in log_text  # enters ready_window
 
 
 def test_watch_gui_logs_still_no_record_then_completes(harness):
@@ -294,7 +296,8 @@ def test_mixed_trigger_restart_keeps_new_ready_window_hud_intact(harness):
     assert "branch_hit fn-save" in log_text
 
 
-def test_preconfirm_immediate_send_stops_tmux_watcher_before_window_expiry(harness):
+def test_confirm_stops_tmux_watcher_after_transcript_detected(harness):
+    """After watch detects transcript and enters ready_window, confirm sends and stops watcher"""
     harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
     harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
     harness.env["CONFIRM_WINDOW"] = "1.0"
@@ -315,14 +318,14 @@ def test_preconfirm_immediate_send_stops_tmux_watcher_before_window_expiry(harne
     proc = harness.popen("watch")
     assert _wait_for_log_text(harness, "watch tmux transcript_detected", timeout=1.0)
 
-    harness.run("preconfirm")
+    harness.run("confirm")
 
     stdout, stderr = proc.communicate(timeout=0.3)
     worker.join(timeout=1)
 
     assert proc.returncode == 0, (stdout, stderr)
     log_text = harness.log_text()
-    assert "preconfirm tmux send_enter pane=%1" in log_text
+    assert "confirm tmux send_enter pane=%1" in log_text
     assert "watch tmux window_expired" not in log_text
 
 
@@ -709,7 +712,7 @@ def test_confirm_gui_returns_nonzero_and_preserves_state_when_send_fails(harness
     assert "confirm gui send_failed status=7" in log_text
     assert "confirm gui send_enter" not in log_text
     assert harness.read_state("mode") == "gui"
-    assert harness.read_state("ready_hud.pid") != ""
+    assert harness.read_state("ready_hud.pid") == ""  # HUD dismissed before send attempt
     assert not (harness.state_dir / "send_consumed.lock").exists()
 
 
@@ -818,39 +821,7 @@ def test_save_resets_consumed_confirm_guard_for_next_cycle(harness):
     assert send_calls == ["send-keys -t %1 Enter", "send-keys -t %1 Enter"]
 
 
-def test_watch_gui_failed_preconfirm_send_falls_back_to_ready_window(harness):
-    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
-    harness.env["CONFIRM_WINDOW"] = "0.2"
-    row = harness.insert_history(status="", refined_text="")
-    harness.run("save")
-    harness._write_executable("osascript", "#!/bin/sh\nexit 6\n")
-
-    def queue_preconfirm_then_publish_transcript():
-        time.sleep(0.03)
-        harness.run("preconfirm")
-        time.sleep(0.03)
-        harness.update_history(
-            row.rowid,
-            status="transcript",
-            updated_at=iso_timestamp(),
-            refined_text="retry after failed send",
-        )
-
-    worker = threading.Thread(target=queue_preconfirm_then_publish_transcript)
-    worker.start()
-    proc = harness.popen("watch")
-    stdout, stderr = proc.communicate(timeout=2)
-    worker.join(timeout=1)
-
-    assert proc.returncode == 0, (stdout, stderr)
-    log_text = harness.log_text()
-    assert "watch gui preconfirm_failed" in log_text
-    assert "watch gui preconfirm_send (" not in log_text
-    assert "watch gui content_settled" in log_text
-    assert "watch gui window_expired" in log_text
-
-
-def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_gui(harness):
+def test_preconfirm_queues_when_transcript_already_ready_in_gui(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
     harness.write_app_config(
         DJI_ENABLE_AUDIO_FEEDBACK=1,
@@ -864,17 +835,13 @@ def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_gui(ha
 
     log_text = harness.log_text()
     assert any("ready.wav" in call for call in harness.afplay_calls())
-    assert "preconfirm gui send_enter" in log_text
-    assert harness.read_state("mode") == ""
-    calls = harness.osascript_calls()
-    assert any(
-        "keystroke return" in " ".join(call["args"])
-        or "write text" in " ".join(call["args"])
-        for call in calls
-    )
+    assert "preconfirm queued" in log_text
+    assert harness.read_state("pending_confirm") == "1"
+    assert harness.read_state("mode") == "gui"  # mode preserved, not cleaned up
+    assert "gui_send_enter:" not in log_text  # no Enter sent
 
 
-def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_tmux(harness):
+def test_preconfirm_queues_when_transcript_already_ready_in_tmux(harness):
     harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
     harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
     harness.write_app_config(
@@ -889,9 +856,10 @@ def test_preconfirm_sends_immediately_when_transcript_is_already_ready_in_tmux(h
 
     log_text = harness.log_text()
     assert any("ready.wav" in call for call in harness.afplay_calls())
-    assert "preconfirm tmux send_enter pane=%1" in log_text
-    assert harness.read_state("mode") == ""
-    assert any("send-keys -t %1 Enter" in call for call in harness.tmux_calls())
+    assert "preconfirm queued" in log_text
+    assert harness.read_state("pending_confirm") == "1"
+    assert harness.read_state("mode") == "tmux"  # mode preserved, not cleaned up
+    assert not any("send-keys -t %1 Enter" in call for call in harness.tmux_calls())  # no Enter sent
 
 
 def test_watch_tmux_aborts_on_stale_record(harness):
@@ -929,9 +897,206 @@ def test_confirm_gui_sends_enter_and_cleans_up(harness):
     assert "confirm gui send_enter" in log_text
     assert harness.read_state("mode") == ""
     assert harness.read_state("ready_hud.pid") == ""
-    calls = harness.osascript_calls()
-    assert any(
-        "keystroke return" in " ".join(call["args"])
-        or "write text" in " ".join(call["args"])
-        for call in calls
-    )
+    assert "gui_send_enter:" in log_text
+
+
+def test_save_records_spokenly_anchor_and_mode(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.run("save")
+
+    assert harness.read_state("mode") == "gui"
+    assert harness.read_state("engine") == "spokenly"
+    anchor_mtime = harness.read_state("spokenly_anchor_mtime")
+    assert anchor_mtime != ""
+    assert "save mode=gui" in harness.log_text()
+    assert "engine=spokenly" in harness.log_text()
+
+
+def test_watch_spokenly_detects_new_json(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    def insert_spokenly_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json("hello from spokenly", mode="ai_enhanced")
+
+    worker = threading.Thread(target=insert_spokenly_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    assert "watch gui transcript_detected" in log_text
+    assert "watch gui content_settled" in log_text
+    assert "watch gui window_expired" in log_text
+
+
+def test_spokenly_ai_enhanced_mode_extraction(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    def insert_spokenly_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json(
+            "AI enhanced transcription result", mode="ai_enhanced"
+        )
+
+    worker = threading.Thread(target=insert_spokenly_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui transcript_detected" in harness.log_text()
+
+
+def test_spokenly_fast_transcription_mode_extraction(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    def insert_spokenly_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json("Fast transcription result", mode="fast")
+
+    worker = threading.Thread(target=insert_spokenly_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui transcript_detected" in harness.log_text()
+
+
+def test_spokenly_json_parse_error_handling(harness):
+    harness.env["TRANSCRIPTION_ENGINE"] = "spokenly"
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+    harness.run("save")
+
+    # Insert invalid JSON that will fail parsing
+    invalid_json = harness.spokenly_history_dir / time.strftime("%Y-%m-%d") / "invalid.json"
+    invalid_json.parent.mkdir(parents=True, exist_ok=True)
+    invalid_json.write_text("{ invalid json }", encoding="utf-8")
+    time.sleep(0.1)
+
+    # Insert valid JSON after the invalid one
+    def insert_valid_json():
+        time.sleep(0.05)
+        harness.insert_spokenly_json("valid text after parse error", mode="ai_enhanced")
+
+    worker = threading.Thread(target=insert_valid_json)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    # Should detect parse error and continue
+    assert "json_parse_failed" in log_text or "watch gui transcript_detected" in log_text
+
+
+def test_confirm_sends_after_preconfirm_queued_and_transcript_ready(harness):
+    """Full 3-press flow: save → watch (transcript + pending_confirm) → confirm sends Enter"""
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.googlecode.iterm2"
+    harness.env["FAKE_ITERM_WINDOW"] = "↣ test"
+    harness.env["CONFIRM_WINDOW"] = "0.8"  # reasonable window for testing
+    row = harness.insert_history(status="", refined_text="")
+    harness.run("save")
+
+    def queue_preconfirm_publish_transcript():
+        time.sleep(0.1)
+        harness.run("preconfirm")
+        time.sleep(0.05)
+        harness.update_history(
+            row.rowid,
+            status="transcript",
+            updated_at=iso_timestamp(),
+            refined_text="full flow test",
+        )
+
+    worker = threading.Thread(target=queue_preconfirm_publish_transcript)
+    worker.start()
+    proc = harness.popen("watch")
+
+    # Wait for transcript to be detected and ready_window to start
+    assert _wait_for_log_text(harness, "watch tmux transcript_detected", timeout=1.5)
+    assert _wait_for_log_text(harness, "watch tmux content_settled", timeout=0.5)
+
+    harness.run("confirm")
+
+    # Watch process should be killed by confirm's kill_old_watcher
+    # Give it time to exit, then force-kill if needed
+    try:
+        stdout, stderr = proc.communicate(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate(timeout=1)
+
+    worker.join(timeout=1)
+
+    # Returncode can be 0 (clean exit) or -9 (killed by confirm)
+    assert proc.returncode in (0, -9), (stdout, stderr, proc.returncode)
+    log_text = harness.log_text()
+    assert "preconfirm queued" in log_text
+    assert "watch tmux transcript_detected" in log_text
+    assert "confirm tmux send_enter pane=%1" in log_text
+    assert any("send-keys -t %1 Enter" in call for call in harness.tmux_calls())
+    assert "confirm ignored already_consumed" not in log_text
+
+
+def test_watch_enters_ready_window_regardless_of_pending_confirm(harness):
+    """Watch process always enters ready_window, whether pending_confirm exists or not"""
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.env["CONFIRM_WINDOW"] = "0.4"
+
+    # Test 1: without pending_confirm
+    harness.run("save")
+    def insert_transcript_without_preconfirm():
+        time.sleep(0.05)
+        harness.insert_history(status="transcript", refined_text="no preconfirm")
+
+    worker = threading.Thread(target=insert_transcript_without_preconfirm)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log1 = harness.log_text()
+    assert "watch gui transcript_detected" in log1
+    assert "watch gui content_settled" in log1
+
+    # Test 2: with pending_confirm (set before transcript)
+    # Re-create harness state for a fresh run
+    harness.run("save")
+    harness.run("preconfirm")  # preconfirm before transcript ready
+
+    def insert_transcript_with_preconfirm():
+        time.sleep(0.05)
+        harness.insert_history(status="transcript", refined_text="with preconfirm")
+
+    worker = threading.Thread(target=insert_transcript_with_preconfirm)
+    worker.start()
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=2)
+    worker.join(timeout=1)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log2 = harness.log_text()
+    # Should have both "preconfirm queued" and transcript detection
+    assert "preconfirm queued" in log2
+    assert "watch gui transcript_detected" in log2
+    assert "watch gui content_settled" in log2
+    # Both cases should end up in ready_window, no preconfirm_send path

@@ -39,6 +39,9 @@ class DictationHarness:
         self.state_dir.mkdir()
         self.log_file = self.state_dir / "debug.log"
         self.db_path = tmp_path / "typeless.db"
+        self.spokenly_dir = tmp_path / "spokenly"
+        self.spokenly_history_dir = self.spokenly_dir / "History"
+        self.spokenly_history_dir.mkdir(parents=True)
         self.home_dir = tmp_path / "home"
         self.home_dir.mkdir()
         self.config_dir = self.home_dir / ".config" / "dji-mic-dictation"
@@ -61,6 +64,7 @@ class DictationHarness:
                 "STATE_DIR": str(self.state_dir),
                 "LOG": str(self.log_file),
                 "TYPELESS_DB": str(self.db_path),
+                "SPOKENLY_HISTORY_DIR": str(self.spokenly_history_dir),
                 "TMUX_BIN": str(self.bin_dir / "tmux"),
                 "KCLI": str(self.bin_dir / "karabiner_cli"),
                 "OSASCRIPT_BIN": str(self.bin_dir / "osascript"),
@@ -159,6 +163,7 @@ with open(log, "a", encoding="utf-8") as fh:
 import os
 import shlex
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -171,7 +176,8 @@ time.sleep(float(os.environ.get("SWIFTC_STUB_SLEEP", "0")))
 args = sys.argv[1:]
 output_path = args[args.index("-o") + 1]
 script = Path(output_path)
-script.write_text({repr(textwrap.dedent(f'''#!/usr/bin/env {python}
+script.parent.mkdir(parents=True, exist_ok=True)
+hud_script = textwrap.dedent(f'''#!/usr/bin/env {python}
 import os
 from pathlib import Path
 import signal
@@ -183,7 +189,8 @@ log = os.environ["HUD_LOG_FILE"]
 
 def append(entry):
 	with open(log, "a", encoding="utf-8") as fh:
-		fh.write(entry + "\\n")
+		newline = "\\n"
+		fh.write(entry + newline)
 
 args = sys.argv[1:]
 append(" ".join(shlex.quote(arg) for arg in args))
@@ -197,7 +204,8 @@ if "--daemon" in args:
 
 	def handle_command(_signum, _frame):
 		command = control_path.read_text(encoding="utf-8").strip() if control_path.exists() else ""
-		append(f"command {{command}}")
+		newline = "\\n"
+		append(f"command {{command}}{{newline}}")
 		if command == "stop":
 			running[0] = False
 
@@ -217,7 +225,8 @@ if duration is None:
 	visible_args = [arg for arg in args if arg != "--warmup"]
 	duration = visible_args[0] if visible_args else "0"
 time.sleep(float(duration))
-'''))}, encoding="utf-8")
+''')
+script.write_text(hud_script, encoding="utf-8")
 script.chmod(0o755)
 """,
         )
@@ -313,6 +322,84 @@ elif args[:2] == ["-l", "JavaScript"]:
                 (rowid,),
             ).fetchone()
         return HistoryRow(*row)
+
+    def insert_spokenly_json(self, text, mode="ai_enhanced", timestamp_offset=0):
+        """Create a mock Spokenly JSON file.
+
+        Args:
+            text: The transcription text
+            mode: Either 'ai_enhanced' (uses conversation.messages) or 'fast' (uses transcriptionData)
+            timestamp_offset: Offset in seconds from now for the file modification time
+        """
+        import time
+
+        today_dir = self.spokenly_history_dir / time.strftime("%Y-%m-%d")
+        today_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate unique filename
+        timestamp = int(time.time() * 1000)
+        json_file = today_dir / f"{timestamp}.json"
+
+        if mode == "ai_enhanced":
+            data = {
+                "content": {
+                    "dictation": {
+                        "uuid-1234": {
+                            "success": {
+                                "uuid-5678": {
+                                    "conversation": {
+                                        "messages": [
+                                            {"role": "user", "content": {"value": "..."}},
+                                            {"role": "assistant", "content": {"value": text}},
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        else:  # fast mode
+            data = {
+                "content": {
+                    "dictation": {
+                        "uuid-1234": {
+                            "success": {
+                                "uuid-5678": {
+                                    "result": {
+                                        "transcriptionData": {
+                                            "segments": [{"text": text}]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        json_file.write_text(json.dumps(data), encoding="utf-8")
+
+        # Adjust file modification time if offset is provided
+        if timestamp_offset != 0:
+            current_time = time.time()
+            new_time = current_time + timestamp_offset
+            os.utime(json_file, (new_time, new_time))
+
+        return json_file
+
+    def update_spokenly_json_mtime(self, json_file, offset=1):
+        """Update the modification time of a Spokenly JSON file.
+
+        Args:
+            json_file: Path to the JSON file
+            offset: Offset in seconds from now
+        """
+        import time
+
+        current_time = time.time()
+        new_time = current_time + offset
+        os.utime(json_file, (new_time, new_time))
 
     def read_state(self, name):
         path = self.state_dir / name

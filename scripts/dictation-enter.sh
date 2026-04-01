@@ -15,6 +15,8 @@ LOG="${LOG:-$STATE_DIR/debug.log}"
 TMUX_BIN="${TMUX_BIN:-$(command -v tmux 2>/dev/null || echo /opt/homebrew/bin/tmux)}"
 KCLI="${KCLI:-/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli}"
 TYPELESS_DB="${TYPELESS_DB:-$HOME/Library/Application Support/Typeless/typeless.db}"
+SPOKENLY_HISTORY_DIR="${SPOKENLY_HISTORY_DIR:-$HOME/Library/Application Support/Spokenly/History}"
+TRANSCRIPTION_ENGINE="${TRANSCRIPTION_ENGINE:-typeless}"
 CONFIRM_WINDOW="${CONFIRM_WINDOW:-3}"
 WAIT_PHASE_DURATION="${WAIT_PHASE_DURATION:-2}"
 PRECONFIRM_GRACE_INTERVAL="${PRECONFIRM_GRACE_INTERVAL:-0.02}"
@@ -786,7 +788,7 @@ cleanup() {
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
-	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,window_deadline,save_in_progress}
+	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,spokenly_anchor_mtime,engine,ready_hud.pid,session_id,window_deadline,save_in_progress}
 }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
@@ -999,6 +1001,77 @@ typeless_check_stale() {
 		"SELECT 1 FROM history WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
 }
 
+spokenly_get_today_dir() {
+	echo "$SPOKENLY_HISTORY_DIR/$(/bin/date +%Y-%m-%d)"
+}
+
+spokenly_latest_json_mtime() {
+	local date_dir
+	date_dir="$(spokenly_get_today_dir)"
+	[ -d "$date_dir" ] || return 1
+	stat -f "%m" "$date_dir"/*.json 2>/dev/null | sort -rn | head -1
+}
+
+spokenly_check_new_file() {
+	local anchor_mtime="$1"
+	local current_mtime
+	[ -z "$anchor_mtime" ] && return 1
+	current_mtime="$(spokenly_latest_json_mtime)"
+	[ -n "$current_mtime" ] && awk -v cur="$current_mtime" -v anc="$anchor_mtime" 'BEGIN { exit !(cur > anc) }'
+}
+
+spokenly_find_latest_json() {
+	local date_dir
+	date_dir="$(spokenly_get_today_dir)"
+	[ -d "$date_dir" ] || return 1
+	find "$date_dir" -name '*.json' -maxdepth 1 -type f -print0 | xargs -0 ls -t 2>/dev/null | head -1
+}
+
+spokenly_extract_text() {
+	local json_file="$1"
+	[ -z "$json_file" ] || [ ! -f "$json_file" ] && return 1
+	"$PYTHON3_BIN" - "$json_file" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], 'r') as f:
+        data = json.load(f)
+
+    # Extract dictation data
+    dictation = data.get('content', {}).get('dictation', {})
+    first_key = next(iter(dictation), None)
+    if not first_key:
+        sys.exit(1)
+
+    success = dictation[first_key].get('success', {})
+    first_success_key = next(iter(success), None)
+    if not first_success_key:
+        sys.exit(1)
+
+    # Try AI-enhanced mode (conversation) first
+    if 'conversation' in success[first_success_key]:
+        messages = success[first_success_key]['conversation'].get('messages', [])
+        for msg in messages:
+            if msg.get('role') == 'assistant':
+                text = msg.get('content', {}).get('value', '')
+                if text:
+                    print(text)
+                    sys.exit(0)
+
+    # Fallback to fast transcription mode (transcriptionData)
+    if 'result' in success[first_success_key]:
+        segments = success[first_success_key]['result']['transcriptionData'].get('segments', [])
+        if segments:
+            text = segments[0].get('text', '')
+            if text:
+                print(text)
+                sys.exit(0)
+
+    sys.exit(1)
+except Exception:
+    sys.exit(1)
+PY
+}
+
 gui_send_enter() {
 	local bundle
 	bundle="$("$OSASCRIPT_BIN" -e \
@@ -1024,14 +1097,33 @@ gui_send_enter() {
 
 transcript_ready_since_save() {
 	[ -f "$STATE_DIR/save_ts" ] || return 1
-	local anchor_rowid
-	local anchor_updated_at
-	local done_status
-	anchor_rowid="$(read_file db_anchor_rowid)"
-	[ -n "$anchor_rowid" ] || anchor_rowid=0
-	anchor_updated_at="$(read_file db_anchor_updated_at)"
-	done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
-	[ "$done_status" = "transcript" ]
+	local engine
+	engine="$(read_file engine)"
+	# Backward compatibility: if engine state file doesn't exist, assume typeless
+	[ -n "$engine" ] || engine="typeless"
+
+	if [ "$engine" = "spokenly" ]; then
+		local anchor_mtime
+		anchor_mtime="$(read_file spokenly_anchor_mtime)"
+		[ -n "$anchor_mtime" ] || anchor_mtime=0
+		spokenly_check_new_file "$anchor_mtime" || return 1
+		local json_file
+		json_file="$(spokenly_find_latest_json)"
+		[ -n "$json_file" ] || return 1
+		local text
+		text="$(spokenly_extract_text "$json_file")"
+		[ -n "$text" ] || return 1
+		return 0
+	else
+		local anchor_rowid
+		local anchor_updated_at
+		local done_status
+		anchor_rowid="$(read_file db_anchor_rowid)"
+		[ -n "$anchor_rowid" ] || anchor_rowid=0
+		anchor_updated_at="$(read_file db_anchor_updated_at)"
+		done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
+		[ "$done_status" = "transcript" ]
+	fi
 }
 
 send_current_mode_enter() {
@@ -1085,11 +1177,6 @@ save)
 	write_file save_in_progress 1
 	save_ts="$(utc_timestamp_ms)"
 	[ -n "$save_ts" ] || save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-	anchor_rowid="$(typeless_last_rowid)"
-	[ -n "$anchor_rowid" ] || anchor_rowid=0
-	anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
-	session_id="$(generate_session_id)"
-	[ -n "$session_id" ] || session_id="$$-$(/bin/date +%s)"
 
 	front_bundle="$("$OSASCRIPT_BIN" -e \
 		'tell application "System Events" to return bundle identifier of first application process whose frontmost is true' 2>/dev/null)"
@@ -1107,21 +1194,33 @@ save)
 		;;
 	esac
 
-	if [ -n "$pane" ]; then
-		log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
+	# Save engine-specific anchors
+	if [ "$TRANSCRIPTION_ENGINE" = "spokenly" ]; then
+		anchor_mtime="$(spokenly_latest_json_mtime)"
+		[ -n "$anchor_mtime" ] || anchor_mtime=0
+		log "save mode=${pane:+tmux}${pane:-gui} app=${front_bundle} save_ts=${save_ts} anchor_mtime=${anchor_mtime} engine=spokenly"
+		write_file spokenly_anchor_mtime "$anchor_mtime"
+		write_file engine spokenly
 	else
-		log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
+		anchor_rowid="$(typeless_last_rowid)"
+		[ -n "$anchor_rowid" ] || anchor_rowid=0
+		anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
+		log "save mode=${pane:+tmux}${pane:-gui} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} engine=typeless"
+		write_file db_anchor_rowid "$anchor_rowid"
+		write_file db_anchor_updated_at "$anchor_updated_at"
+		write_file engine typeless
 	fi
+
 	prepare_send_window_hud_if_enabled
 	write_file save_ts "$save_ts"
-	write_file db_anchor_rowid "$anchor_rowid"
-	write_file db_anchor_updated_at "$anchor_updated_at"
 	if [ -n "$pane" ]; then
 		write_file mode tmux
 		write_file pane_id "$pane"
 	else
 		write_file mode gui
 	fi
+	session_id="$(generate_session_id)"
+	[ -n "$session_id" ] || session_id="$$-$(/bin/date +%s)"
 	write_file session_id "$session_id"
 	/bin/rm -f "$STATE_DIR/save_in_progress"
 	;;
@@ -1134,6 +1233,9 @@ watch)
 	trap 'clear_watch_state "$watch_session_id"; exit 0' TERM INT
 
 	mode="$(wait_for_save_state_value mode)"
+	engine="$(read_file engine)"
+	# Backward compatibility: if engine state file doesn't exist, assume typeless
+	[ -n "$engine" ] || engine="typeless"
 	write_file watcher.pid "$$"
 
 	if [ "$mode" = "tmux" ]; then
@@ -1143,128 +1245,254 @@ watch)
 			exit 0
 		}
 		save_ts="$(read_file save_ts)"
-		anchor_rowid="$(read_file db_anchor_rowid)"
-		anchor_updated_at="$(read_file db_anchor_updated_at)"
-		[ -n "$anchor_rowid" ] || anchor_rowid=0
-		log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		reuse_or_open_send_window "watch tmux" "$watch_session_id"
 
-		changed=0 i=0 done_status="" has_record=0
-		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
-			session_is_current "$watch_session_id" || exit 0
-			/bin/sleep "$WATCH_POLL_INTERVAL"
-			i=$((i + 1))
-			session_is_current "$watch_session_id" || exit 0
-			done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
-			if [ -n "$done_status" ]; then
-				changed=1 && break
-			fi
-			if [ $has_record -eq 0 ] && [ -n "$(typeless_has_record "$anchor_rowid" "$anchor_updated_at")" ]; then
-				has_record=1
-				log "watch tmux record_detected (${i} polls ~$((i / 10))s)"
-			elif [ $has_record -eq 0 ] && [ $i -eq "$NO_RECORD_LOG_AFTER_POLLS" ]; then
-				log "watch tmux still_no_record_after_${NO_RECORD_LOG_LABEL}"
-			fi
-			if [ $has_record -eq 1 ] && [ $((i % STALE_CHECK_EVERY_POLLS)) -eq 0 ]; then
-				if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
-					log "watch tmux stale_record (${i} polls ~$((i / 10))s), abort"
-					clear_watch_state "$watch_session_id"
-					/bin/rm -f "$STATE_DIR/watcher.pid"
-					exit 0
-				fi
-			fi
-		done
+		if [ "$engine" = "spokenly" ]; then
+			anchor_mtime="$(read_file spokenly_anchor_mtime)"
+			[ -n "$anchor_mtime" ] || anchor_mtime=0
+			log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_mtime=${anchor_mtime} engine=spokenly polling"
+			reuse_or_open_send_window "watch tmux" "$watch_session_id"
 
-		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
-			session_is_current "$watch_session_id" || exit 0
-			log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
-			if wait_for_pending_confirm; then
+			changed=0 i=0 has_file=0
+			while [ $i -lt "$WATCH_MAX_POLLS" ]; do
 				session_is_current "$watch_session_id" || exit 0
-				/bin/sleep "$DELIVERY_DELAY"
-				if send_current_mode_enter "watch tmux preconfirm"; then
-					finalize_send_state "$watch_session_id"
-					log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
-					cleanup "$watch_session_id"
+				/bin/sleep "$WATCH_POLL_INTERVAL"
+				i=$((i + 1))
+				session_is_current "$watch_session_id" || exit 0
+
+				if spokenly_check_new_file "$anchor_mtime"; then
+					json_file="$(spokenly_find_latest_json)"
+					if [ -n "$json_file" ]; then
+						text="$(spokenly_extract_text "$json_file")"
+						if [ -n "$text" ]; then
+							changed=1 && break
+						else
+							# JSON parse failed, update anchor to avoid re-checking same file
+							anchor_mtime="$(spokenly_latest_json_mtime)"
+							log "watch tmux json_parse_failed (${i} polls ~$((i / 10))s), updated anchor_mtime=${anchor_mtime}"
+						fi
+					fi
+				fi
+
+				if [ $has_file -eq 0 ] && [ -n "$(spokenly_find_latest_json)" ]; then
+					has_file=1
+					log "watch tmux file_detected (${i} polls ~$((i / 10))s)"
+				elif [ $has_file -eq 0 ] && [ $i -eq "$NO_RECORD_LOG_AFTER_POLLS" ]; then
+					log "watch tmux still_no_record_after_${NO_RECORD_LOG_LABEL}"
+				fi
+			done
+
+			if [ $changed -eq 1 ]; then
+				session_is_current "$watch_session_id" || exit 0
+				log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
+				if wait_for_pending_confirm; then
+					session_is_current "$watch_session_id" || exit 0
+					/bin/sleep "$DELIVERY_DELAY"
+					if send_current_mode_enter "watch tmux preconfirm"; then
+						finalize_send_state "$watch_session_id"
+						log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
+						cleanup "$watch_session_id"
+					else
+						send_status=$?
+						/bin/rm -f "$STATE_DIR/pending_confirm"
+						log "watch tmux preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
+						enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
+					fi
 				else
-					send_status=$?
-					/bin/rm -f "$STATE_DIR/pending_confirm"
-					log "watch tmux preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
 					enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
 				fi
 			else
-				enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
+				clear_watch_state "$watch_session_id"
+				log "watch tmux no_change (timeout 30s)"
+				/bin/rm -f "$STATE_DIR/watcher.pid"
 			fi
-		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
-			clear_watch_state "$watch_session_id"
-			log "watch tmux dismissed (${i} polls ~$((i / 10))s)"
-			/bin/rm -f "$STATE_DIR/watcher.pid"
 		else
-			clear_watch_state "$watch_session_id"
-			log "watch tmux no_change (timeout 30s)"
-			/bin/rm -f "$STATE_DIR/watcher.pid"
+			# Typeless engine (original logic)
+			anchor_rowid="$(read_file db_anchor_rowid)"
+			anchor_updated_at="$(read_file db_anchor_updated_at)"
+			[ -n "$anchor_rowid" ] || anchor_rowid=0
+			log "watch mode=tmux pane=${pane} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} engine=typeless polling"
+			reuse_or_open_send_window "watch tmux" "$watch_session_id"
+
+			changed=0 i=0 done_status="" has_record=0
+			while [ $i -lt "$WATCH_MAX_POLLS" ]; do
+				session_is_current "$watch_session_id" || exit 0
+				/bin/sleep "$WATCH_POLL_INTERVAL"
+				i=$((i + 1))
+				session_is_current "$watch_session_id" || exit 0
+				done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
+				if [ -n "$done_status" ]; then
+					changed=1 && break
+				fi
+				if [ $has_record -eq 0 ] && [ -n "$(typeless_has_record "$anchor_rowid" "$anchor_updated_at")" ]; then
+					has_record=1
+					log "watch tmux record_detected (${i} polls ~$((i / 10))s)"
+				elif [ $has_record -eq 0 ] && [ $i -eq "$NO_RECORD_LOG_AFTER_POLLS" ]; then
+					log "watch tmux still_no_record_after_${NO_RECORD_LOG_LABEL}"
+				fi
+				if [ $has_record -eq 1 ] && [ $((i % STALE_CHECK_EVERY_POLLS)) -eq 0 ]; then
+					if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
+						log "watch tmux stale_record (${i} polls ~$((i / 10))s), abort"
+						clear_watch_state "$watch_session_id"
+						/bin/rm -f "$STATE_DIR/watcher.pid"
+						exit 0
+					fi
+				fi
+			done
+
+			if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+				session_is_current "$watch_session_id" || exit 0
+				log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
+				if wait_for_pending_confirm; then
+					session_is_current "$watch_session_id" || exit 0
+					/bin/sleep "$DELIVERY_DELAY"
+					if send_current_mode_enter "watch tmux preconfirm"; then
+						finalize_send_state "$watch_session_id"
+						log "watch tmux preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
+						cleanup "$watch_session_id"
+					else
+						send_status=$?
+						/bin/rm -f "$STATE_DIR/pending_confirm"
+						log "watch tmux preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
+						enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
+					fi
+				else
+					enter_ready_window tmux "$i" "$pending_confirm_polls" "$watch_session_id"
+				fi
+			elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
+				clear_watch_state "$watch_session_id"
+				log "watch tmux dismissed (${i} polls ~$((i / 10))s)"
+				/bin/rm -f "$STATE_DIR/watcher.pid"
+			else
+				clear_watch_state "$watch_session_id"
+				log "watch tmux no_change (timeout 30s)"
+				/bin/rm -f "$STATE_DIR/watcher.pid"
+			fi
 		fi
 
 	elif [ "$mode" = "gui" ]; then
 		save_ts="$(read_file save_ts)"
-		anchor_rowid="$(read_file db_anchor_rowid)"
-		anchor_updated_at="$(read_file db_anchor_updated_at)"
-		[ -n "$anchor_rowid" ] || anchor_rowid=0
-		log "watch mode=gui save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} polling"
-		reuse_or_open_send_window "watch gui" "$watch_session_id"
 
-		changed=0 i=0 has_record=0
-		while [ $i -lt "$WATCH_MAX_POLLS" ]; do
-			session_is_current "$watch_session_id" || exit 0
-			/bin/sleep "$WATCH_POLL_INTERVAL"
-			i=$((i + 1))
-			session_is_current "$watch_session_id" || exit 0
-			done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
-			if [ -n "$done_status" ]; then
-				changed=1 && break
-			fi
-			if [ $has_record -eq 0 ] && [ -n "$(typeless_has_record "$anchor_rowid" "$anchor_updated_at")" ]; then
-				has_record=1
-				log "watch gui record_detected (${i} polls ~$((i / 10))s)"
-			elif [ $has_record -eq 0 ] && [ $i -eq "$NO_RECORD_LOG_AFTER_POLLS" ]; then
-				log "watch gui still_no_record_after_${NO_RECORD_LOG_LABEL}"
-			fi
-			if [ $has_record -eq 1 ] && [ $((i % STALE_CHECK_EVERY_POLLS)) -eq 0 ]; then
-				if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
-					log "watch gui stale_record (${i} polls ~$((i / 10))s), abort"
-					clear_watch_state "$watch_session_id"
-					/bin/rm -f "$STATE_DIR/watcher.pid"
-					exit 0
-				fi
-			fi
-		done
+		if [ "$engine" = "spokenly" ]; then
+			anchor_mtime="$(read_file spokenly_anchor_mtime)"
+			[ -n "$anchor_mtime" ] || anchor_mtime=0
+			log "watch mode=gui save_ts=${save_ts} anchor_mtime=${anchor_mtime} engine=spokenly polling"
+			reuse_or_open_send_window "watch gui" "$watch_session_id"
 
-		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
-			session_is_current "$watch_session_id" || exit 0
-			log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
-			if wait_for_pending_confirm; then
+			changed=0 i=0 has_file=0
+			while [ $i -lt "$WATCH_MAX_POLLS" ]; do
 				session_is_current "$watch_session_id" || exit 0
-				/bin/sleep "$DELIVERY_DELAY"
-				if send_current_mode_enter "watch gui preconfirm"; then
-					finalize_send_state "$watch_session_id"
-					log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
-					cleanup "$watch_session_id"
+				/bin/sleep "$WATCH_POLL_INTERVAL"
+				i=$((i + 1))
+				session_is_current "$watch_session_id" || exit 0
+
+				if spokenly_check_new_file "$anchor_mtime"; then
+					json_file="$(spokenly_find_latest_json)"
+					if [ -n "$json_file" ]; then
+						text="$(spokenly_extract_text "$json_file")"
+						if [ -n "$text" ]; then
+							changed=1 && break
+						else
+							# JSON parse failed, update anchor to avoid re-checking same file
+							anchor_mtime="$(spokenly_latest_json_mtime)"
+							log "watch gui json_parse_failed (${i} polls ~$((i / 10))s), updated anchor_mtime=${anchor_mtime}"
+						fi
+					fi
+				fi
+
+				if [ $has_file -eq 0 ] && [ -n "$(spokenly_find_latest_json)" ]; then
+					has_file=1
+					log "watch gui file_detected (${i} polls ~$((i / 10))s)"
+				elif [ $has_file -eq 0 ] && [ $i -eq "$NO_RECORD_LOG_AFTER_POLLS" ]; then
+					log "watch gui still_no_record_after_${NO_RECORD_LOG_LABEL}"
+				fi
+			done
+
+			if [ $changed -eq 1 ]; then
+				session_is_current "$watch_session_id" || exit 0
+				log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
+				if wait_for_pending_confirm; then
+					session_is_current "$watch_session_id" || exit 0
+					/bin/sleep "$DELIVERY_DELAY"
+					if send_current_mode_enter "watch gui preconfirm"; then
+						finalize_send_state "$watch_session_id"
+						log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
+						cleanup "$watch_session_id"
+					else
+						send_status=$?
+						/bin/rm -f "$STATE_DIR/pending_confirm"
+						log "watch gui preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
+						enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
+					fi
 				else
-					send_status=$?
-					/bin/rm -f "$STATE_DIR/pending_confirm"
-					log "watch gui preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
 					enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
 				fi
 			else
-				enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
+				clear_watch_state "$watch_session_id"
+				log "watch gui no_change (timeout 30s)"
+				/bin/rm -f "$STATE_DIR/watcher.pid"
 			fi
-		elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
-			clear_watch_state "$watch_session_id"
-			log "watch gui dismissed (${i} polls ~$((i / 10))s)"
-			/bin/rm -f "$STATE_DIR/watcher.pid"
 		else
-			clear_watch_state "$watch_session_id"
-			log "watch gui no_change (timeout 30s)"
-			/bin/rm -f "$STATE_DIR/watcher.pid"
+			# Typeless engine (original logic)
+			anchor_rowid="$(read_file db_anchor_rowid)"
+			anchor_updated_at="$(read_file db_anchor_updated_at)"
+			[ -n "$anchor_rowid" ] || anchor_rowid=0
+			log "watch mode=gui save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} engine=typeless polling"
+			reuse_or_open_send_window "watch gui" "$watch_session_id"
+
+			changed=0 i=0 has_record=0
+			while [ $i -lt "$WATCH_MAX_POLLS" ]; do
+				session_is_current "$watch_session_id" || exit 0
+				/bin/sleep "$WATCH_POLL_INTERVAL"
+				i=$((i + 1))
+				session_is_current "$watch_session_id" || exit 0
+				done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
+				if [ -n "$done_status" ]; then
+					changed=1 && break
+				fi
+				if [ $has_record -eq 0 ] && [ -n "$(typeless_has_record "$anchor_rowid" "$anchor_updated_at")" ]; then
+					has_record=1
+					log "watch gui record_detected (${i} polls ~$((i / 10))s)"
+				elif [ $has_record -eq 0 ] && [ $i -eq "$NO_RECORD_LOG_AFTER_POLLS" ]; then
+					log "watch gui still_no_record_after_${NO_RECORD_LOG_LABEL}"
+				fi
+				if [ $has_record -eq 1 ] && [ $((i % STALE_CHECK_EVERY_POLLS)) -eq 0 ]; then
+					if [ -n "$(typeless_check_stale "$anchor_rowid" "$anchor_updated_at")" ]; then
+						log "watch gui stale_record (${i} polls ~$((i / 10))s), abort"
+						clear_watch_state "$watch_session_id"
+						/bin/rm -f "$STATE_DIR/watcher.pid"
+						exit 0
+					fi
+				fi
+			done
+
+			if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+				session_is_current "$watch_session_id" || exit 0
+				log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
+				if wait_for_pending_confirm; then
+					session_is_current "$watch_session_id" || exit 0
+					/bin/sleep "$DELIVERY_DELAY"
+					if send_current_mode_enter "watch gui preconfirm"; then
+						finalize_send_state "$watch_session_id"
+						log "watch gui preconfirm_send (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
+						cleanup "$watch_session_id"
+					else
+						send_status=$?
+						/bin/rm -f "$STATE_DIR/pending_confirm"
+						log "watch gui preconfirm_failed (${i} polls ~$((i / 10))s wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
+						enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
+					fi
+				else
+					enter_ready_window gui "$i" "$pending_confirm_polls" "$watch_session_id"
+				fi
+			elif [ $changed -eq 1 ] && [ "$done_status" = "dismissed" ]; then
+				clear_watch_state "$watch_session_id"
+				log "watch gui dismissed (${i} polls ~$((i / 10))s)"
+				/bin/rm -f "$STATE_DIR/watcher.pid"
+			else
+				clear_watch_state "$watch_session_id"
+				log "watch gui no_change (timeout 30s)"
+				/bin/rm -f "$STATE_DIR/watcher.pid"
+			fi
 		fi
 	else
 		log "watch unknown mode, exit"
