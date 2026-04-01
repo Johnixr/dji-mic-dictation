@@ -163,6 +163,7 @@ with open(log, "a", encoding="utf-8") as fh:
 import os
 import shlex
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -175,6 +176,11 @@ time.sleep(float(os.environ.get("SWIFTC_STUB_SLEEP", "0")))
 args = sys.argv[1:]
 output_path = args[args.index("-o") + 1]
 script = Path(output_path)
+script.parent.mkdir(parents=True, exist_ok=True)
+if "send-return" in output_path:
+    script.write_bytes(b"#!/bin/sh\\nexit 0\\n")
+    script.chmod(0o755)
+    raise SystemExit(0)
 hud_script = textwrap.dedent(f'''#!/usr/bin/env {python}
 import os
 from pathlib import Path
@@ -224,7 +230,7 @@ if duration is None:
 	duration = visible_args[0] if visible_args else "0"
 time.sleep(float(duration))
 ''')
-script.write_text(repr(hud_script), encoding="utf-8")
+script.write_text(hud_script, encoding="utf-8")
 script.chmod(0o755)
 """,
         )

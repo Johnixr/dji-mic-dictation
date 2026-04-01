@@ -30,9 +30,46 @@ npx github:Johnixr/dji-mic-dictation uninstall
 
 Use the CLI as the default path. If you want an AI assistant to help, have it call the same CLI instead of reimplementing the setup steps.
 
+## Transcription Engine Support
+
+This project supports two transcription engines:
+
+### Typeless
+- AI-enhanced dictation on top of macOS built-in
+- LLM layer for voice cleanup, filler word removal, grammar fix
+- Supports mixed Chinese/English seamlessly
+- Data stored in SQLite database at `~/Library/Application Support/Typeless/typeless.db`
+
+### Spokenly
+- Alternative AI transcription app
+- Similar three-button workflow: Fn → Start, Fn → Stop, Fn → Send
+- Supports both AI-enhanced mode (with prompts) and fast transcription mode
+- Data stored as JSON files in `~/Library/Application Support/Spokenly/History/YYYY-MM-DD/`
+
+### Engine Selection
+
+The installer automatically detects available engines:
+- If only one engine is available → Uses that engine
+- If both are available → Defaults to Typeless for backward compatibility
+- Use `--transcription-engine typeless|spokenly` to override auto-detection
+
+Engine choice is persisted in the manifest for future updates.
+
+### Comparison
+
+| Feature | Typeless | Spokenly |
+|---------|----------|----------|
+| Detection Method | SQLite DB polling | File timestamp polling |
+| Latency | ~100ms | ~100ms |
+| Dependencies | SQLite3 (built-in) | Python3 (built-in on macOS) |
+| Setup | macOS dictation + Typeless app | Spokenly app only |
+| Pricing | Free: 4,000 chars/week, Pro: $12/month | (Check Spokenly website) |
+
+Both engines provide similar AI-enhanced transcription quality. Choose based on your preference or availability.
+
 ## Quick start
 
-### Step 1: Install Typeless (required for the current workflow)
+### Step 1: Install a transcription engine (Typeless or Spokenly)
 
 [Typeless](https://www.typeless.com/?via=john-yin) adds an LLM layer on top of macOS dictation — it cleans up your speech, removes filler words, fixes grammar, and handles mixed Chinese/English seamlessly.
 

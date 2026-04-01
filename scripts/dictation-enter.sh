@@ -1014,21 +1014,23 @@ spokenly_latest_json_mtime() {
 
 spokenly_check_new_file() {
 	local anchor_mtime="$1"
+	local current_mtime
 	[ -z "$anchor_mtime" ] && return 1
-	local current_mtime="$(spokenly_latest_json_mtime)"
+	current_mtime="$(spokenly_latest_json_mtime)"
 	[ -n "$current_mtime" ] && awk -v cur="$current_mtime" -v anc="$anchor_mtime" 'BEGIN { exit !(cur > anc) }'
 }
 
 spokenly_find_latest_json() {
-	local date_dir="$(spokenly_get_today_dir)"
+	local date_dir
+	date_dir="$(spokenly_get_today_dir)"
 	[ -d "$date_dir" ] || return 1
-	ls -t "$date_dir"/*.json 2>/dev/null | head -1
+	find "$date_dir" -name '*.json' -maxdepth 1 -type f -print0 | xargs -0 ls -t 2>/dev/null | head -1
 }
 
 spokenly_extract_text() {
 	local json_file="$1"
 	[ -z "$json_file" ] || [ ! -f "$json_file" ] && return 1
-	"$PYTHON3_BIN" - <<'PY' "$json_file"
+	"$PYTHON3_BIN" - "$json_file" <<'PY'
 import json, sys
 try:
     with open(sys.argv[1], 'r') as f:
@@ -1095,7 +1097,8 @@ gui_send_enter() {
 
 transcript_ready_since_save() {
 	[ -f "$STATE_DIR/save_ts" ] || return 1
-	local engine="$(read_file engine)"
+	local engine
+	engine="$(read_file engine)"
 	# Backward compatibility: if engine state file doesn't exist, assume typeless
 	[ -n "$engine" ] || engine="typeless"
 
@@ -1104,9 +1107,11 @@ transcript_ready_since_save() {
 		anchor_mtime="$(read_file spokenly_anchor_mtime)"
 		[ -n "$anchor_mtime" ] || anchor_mtime=0
 		spokenly_check_new_file "$anchor_mtime" || return 1
-		local json_file="$(spokenly_find_latest_json)"
+		local json_file
+		json_file="$(spokenly_find_latest_json)"
 		[ -n "$json_file" ] || return 1
-		local text="$(spokenly_extract_text "$json_file")"
+		local text
+		text="$(spokenly_extract_text "$json_file")"
 		[ -n "$text" ] || return 1
 		return 0
 	else
