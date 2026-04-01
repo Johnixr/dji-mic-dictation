@@ -40,7 +40,7 @@ npx github:Johnixr/dji-mic-dictation uninstall
 - 无缝支持中英文混合
 - 数据存储在 SQLite 数据库 `~/Library/Application Support/Typeless/typeless.db`
 
-### Spokenly
+### [Spokenly](https://spokenly.app/)
 - 替代 AI 转录应用
 - 同样支持三键工作流：Fn → 开始, Fn → 停止, Fn → 发送
 - 支持 AI 增强模式（带提示词）和快速转录模式
@@ -62,14 +62,14 @@ npx github:Johnixr/dji-mic-dictation uninstall
 | 检测方式 | SQLite DB 轮询 | 文件时间戳轮询 |
 | 延迟 | ~100ms | ~100ms |
 | 依赖 | SQLite3（系统自带） | Python3（macOS 自带） |
-| 安装 | macOS 听写 + Typeless App | 仅 Spokenly App |
-| 定价 | 免费版每周 4,000 字，Pro $12/月 | （见 Spokenly 官网） |
+| 安装 | macOS 听写 + Typeless App | 仅 [Spokenly](https://spokenly.app/) App |
+| 定价 | 免费版每周 4,000 字，Pro $12/月 | （见 [Spokenly 官网](https://spokenly.app/)） |
 
 两种引擎都提供类似的 AI 增强转录质量，按个人偏好或可用性选择即可。
 
 ## 三步上手
 
-### 第一步：安装转录引擎（Typeless 或 Spokenly）
+### 第一步：安装转录引擎（[Typeless](https://www.typeless.com/?via=john-yin) 或 [Spokenly](https://spokenly.app/)）
 
 [Typeless](https://www.typeless.com/?via=john-yin) 在 macOS 听写之上加了一层 LLM 智能编辑，自动去除口头禅、修正口误、整理格式，中英文混合也能搞定。
 
@@ -109,7 +109,7 @@ Fn 第 3 下 → 发送 / Enter 到当前 App → AI 开始干活
 | [Karabiner-Elements](https://karabiner-elements.pqrs.org/) | `brew install --cask karabiner-elements` |
 | DJI Mic Mini | 可选硬件触发器；vendor_id: 11427, product_id: 16401 |
 | macOS 听写 | 系统设置 → 键盘 → 听写 → 开启 |
-| [Typeless](https://www.typeless.com/?via=john-yin) 或 Spokenly | 至少安装一个转录引擎 |
+| [Typeless](https://www.typeless.com/?via=john-yin) 或 [Spokenly](https://spokenly.app/) | 至少安装一个转录引擎 |
 
 ## 仓库里有什么
 
