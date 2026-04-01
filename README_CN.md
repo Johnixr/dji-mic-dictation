@@ -30,9 +30,46 @@ npx github:Johnixr/dji-mic-dictation uninstall
 
 默认走 CLI。AI 助手如果要帮你配置，也应该调用这套 CLI，而不是自己重新拼安装步骤。
 
+## 转录引擎支持
+
+本项目支持两种转录引擎：
+
+### Typeless
+- 基于 macOS 内置听写的 AI 增强
+- LLM 层自动清理语音，去除口头禅、修正语法
+- 无缝支持中英文混合
+- 数据存储在 SQLite 数据库 `~/Library/Application Support/Typeless/typeless.db`
+
+### Spokenly
+- 替代 AI 转录应用
+- 同样支持三键工作流：Fn → 开始, Fn → 停止, Fn → 发送
+- 支持 AI 增强模式（带提示词）和快速转录模式
+- 数据存储为 JSON 文件，路径 `~/Library/Application Support/Spokenly/History/YYYY-MM-DD/`
+
+### 引擎选择
+
+安装器会自动检测可用引擎：
+- 如果只有一个引擎可用 → 使用该引擎
+- 如果两个都可用 → 默认使用 Typeless（向后兼容）
+- 使用 `--transcription-engine typeless|spokenly` 可手动覆盖自动检测
+
+引擎选择会保存到 manifest 中，供后续更新使用。
+
+### 对比
+
+| 特性 | Typeless | Spokenly |
+|------|----------|----------|
+| 检测方式 | SQLite DB 轮询 | 文件时间戳轮询 |
+| 延迟 | ~100ms | ~100ms |
+| 依赖 | SQLite3（系统自带） | Python3（macOS 自带） |
+| 安装 | macOS 听写 + Typeless App | 仅 Spokenly App |
+| 定价 | 免费版每周 4,000 字，Pro $12/月 | （见 Spokenly 官网） |
+
+两种引擎都提供类似的 AI 增强转录质量，按个人偏好或可用性选择即可。
+
 ## 三步上手
 
-### 第一步：装 Typeless（当前版本必需）
+### 第一步：安装转录引擎（Typeless 或 Spokenly）
 
 [Typeless](https://www.typeless.com/?via=john-yin) 在 macOS 听写之上加了一层 LLM 智能编辑，自动去除口头禅、修正口误、整理格式，中英文混合也能搞定。
 
@@ -72,7 +109,7 @@ Fn 第 3 下 → 发送 / Enter 到当前 App → AI 开始干活
 | [Karabiner-Elements](https://karabiner-elements.pqrs.org/) | `brew install --cask karabiner-elements` |
 | DJI Mic Mini | 可选硬件触发器；vendor_id: 11427, product_id: 16401 |
 | macOS 听写 | 系统设置 → 键盘 → 听写 → 开启 |
-| [Typeless](https://www.typeless.com/?via=john-yin) | 当前版本必需，因为检测依赖 Typeless DB |
+| [Typeless](https://www.typeless.com/?via=john-yin) 或 Spokenly | 至少安装一个转录引擎 |
 
 ## 仓库里有什么
 
