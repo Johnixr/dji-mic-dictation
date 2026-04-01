@@ -36,7 +36,6 @@ export function createRuntime({ env = process.env } = {}) {
 		karabinerScriptsDir,
 		scriptTargetPath: env.DJI_SCRIPT_TARGET || path.join(karabinerScriptsDir, 'dictation-enter.sh'),
 		karabinerCliPath: env.DJI_KARABINER_CLI || DEFAULT_KARABINER_CLI,
-		sendReturnBinPath: env.DJI_SEND_RETURN_BIN || path.join(configDir, 'send-return'),
 		soundDirectoryPath: env.DJI_SOUND_DIR || '/System/Library/Sounds',
 		typelessDbPath:
 			env.DJI_TYPELESS_DB ||

@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import path from 'node:path';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -170,62 +169,6 @@ async function copyScript(runtime) {
 	await fs.mkdir(runtime.karabinerScriptsDir, { recursive: true });
 	await fs.copyFile(runtime.scriptSourcePath, runtime.scriptTargetPath);
 	await fs.chmod(runtime.scriptTargetPath, 0o755);
-}
-
-/**
- * Compile a Swift binary that posts Return key events via CGEvent.
- *
- * Purpose: Some Electron apps (e.g., Feishu/Lark) have invisible overlay windows
- * that interfere with osascript keystroke events. CGEvent bypasses this issue
- * by posting directly to the HID system event tap.
- *
- * This binary is compiled during install/update and used as a fallback when
- * osascript fails to send keystrokes to certain applications.
- *
- * @param {Runtime} runtime - Runtime configuration
- * @returns {Object} - { status: 'compiled' | 'skipped' | 'failed', reason?: string }
- */
-async function compileSendReturnBinary(runtime) {
-	const { execFile: execFileRaw } = await import('node:child_process');
-	const { promisify: promisifyUtil } = await import('node:util');
-	const execFileAsync = promisifyUtil(execFileRaw);
-
-	// Locate swiftc
-	let swiftc;
-	try {
-		const { stdout } = await execFileAsync('/usr/bin/which', ['swiftc']);
-		swiftc = stdout.trim();
-	} catch {
-		return { status: 'skipped', reason: 'swiftc_not_found' };
-	}
-	if (!swiftc) return { status: 'skipped', reason: 'swiftc_not_found' };
-
-	// Swift source that posts a Return key event via CGEvent
-	const swiftSource = `import CoreGraphics
-import Foundation
-
-let src = CGEventSource(stateID: .hidSystemState)
-let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: true)
-let keyUp   = CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: false)
-keyDown?.post(tap: .cghidEventTap)
-keyUp?.post(tap: .cghidEventTap)
-`;
-
-	await fs.mkdir(runtime.configDir, { recursive: true });
-	const srcPath = path.join(runtime.configDir, 'send-return.swift');
-	const binPath = runtime.sendReturnBinPath;
-	const tmpBin = `${binPath}.tmp`;
-
-	await fs.writeFile(srcPath, swiftSource, 'utf-8');
-	try {
-		await execFileAsync(swiftc, [srcPath, '-o', tmpBin]);
-		await fs.chmod(tmpBin, 0o755);
-		await fs.rename(tmpBin, binPath);
-		return { status: 'compiled' };
-	} catch (err) {
-		try { await fs.unlink(tmpBin); } catch { /* ignore */ }
-		return { status: 'failed', reason: err.message };
-	}
 }
 
 function mergeConfig(existingConfig, overrides = {}) {
@@ -403,7 +346,6 @@ async function syncInstallation(runtime, { profileOptions = {}, configOverrides 
 	await writeKarabinerConfig(runtime, karabinerConfig);
 	const profileSwitch = await selectProfileViaCli(runtime, appliedProfileName);
 	await copyScript(runtime);
-	await compileSendReturnBinary(runtime);
 	await writeConfig(runtime, nextConfig);
 
 	const manifest = {

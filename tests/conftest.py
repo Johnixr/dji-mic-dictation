@@ -177,10 +177,6 @@ args = sys.argv[1:]
 output_path = args[args.index("-o") + 1]
 script = Path(output_path)
 script.parent.mkdir(parents=True, exist_ok=True)
-if "send-return" in output_path:
-    script.write_bytes(b"#!/bin/sh\\nexit 0\\n")
-    script.chmod(0o755)
-    raise SystemExit(0)
 hud_script = textwrap.dedent(f'''#!/usr/bin/env {python}
 import os
 from pathlib import Path
