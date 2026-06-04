@@ -11,7 +11,7 @@
 直接运行安装器：
 
 ```bash
-npx github:Johnixr/dji-mic-dictation install
+npx github:johnixr/dji-mic-dictation install
 ```
 
 安装器会自动检查是否接了 DJI Mic Mini：
@@ -22,10 +22,10 @@ npx github:Johnixr/dji-mic-dictation install
 常用后续命令：
 
 ```bash
-npx github:Johnixr/dji-mic-dictation update
-npx github:Johnixr/dji-mic-dictation doctor
-npx github:Johnixr/dji-mic-dictation config
-npx github:Johnixr/dji-mic-dictation uninstall
+npx github:johnixr/dji-mic-dictation update
+npx github:johnixr/dji-mic-dictation doctor
+npx github:johnixr/dji-mic-dictation config
+npx github:johnixr/dji-mic-dictation uninstall
 ```
 
 默认走 CLI。AI 助手如果要帮你配置，也应该调用这套 CLI，而不是自己重新拼安装步骤。
@@ -49,7 +49,7 @@ npx github:Johnixr/dji-mic-dictation uninstall
 ### 第三步：运行安装器
 
 ```bash
-npx github:Johnixr/dji-mic-dictation install
+npx github:johnixr/dji-mic-dictation install
 ```
 
 ## 工作原理
@@ -113,13 +113,13 @@ cat /tmp/dji-dictation/debug.log
 | 现象 | 可能原因 | 解决方法 |
 |------|---------|---------|
 | 可选硬件按钮没反应 | Karabiner 看不到设备 | 系统设置 → 隐私与安全 → 输入监控，给 Karabiner 授权 |
-| 可选硬件按钮只调音量 | 安装时没有检测到设备，所以只配置了 keyboard workflow | 把 DJI 接收器插上后重新执行 `npx github:Johnixr/dji-mic-dictation install` |
+| 可选硬件按钮只调音量 | 安装时没有检测到设备，所以只配置了 keyboard workflow | 把 DJI 接收器插上后重新执行 `npx github:johnixr/dji-mic-dictation install` |
 | 听写正常但没有提示音/浮层不出现 | 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 `/usr/bin/osascript` 或终端 App 授权 |
-| 有提示音但浮层不出现 | 就绪浮层需要编译 Swift 二进制；执行 `npx github:Johnixr/dji-mic-dictation update` 刷新。部分 App 有非标准窗口（如 Electron 水印层），飞书已适配；其他 App 欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
-| CLI 提示找不到 Typeless DB | Typeless 没安装或还没打开过 | 安装 Typeless，至少打开一次，再重新执行 `npx github:Johnixr/dji-mic-dictation install` 或 `npx github:Johnixr/dji-mic-dictation doctor` |
+| 有提示音但浮层不出现 | 就绪浮层需要编译 Swift 二进制；执行 `npx github:johnixr/dji-mic-dictation update` 刷新。部分 App 有非标准窗口（如 Electron 水印层），飞书已适配；其他 App 欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
+| CLI 提示找不到 Typeless DB | Typeless 没安装或还没打开过 | 安装 Typeless，至少打开一次，再重新执行 `npx github:johnixr/dji-mic-dictation install` 或 `npx github:johnixr/dji-mic-dictation doctor` |
 | 浮层出现但 Enter 没发出去 | 终端 App 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 iTerm2 / Terminal.app 授权 |
-| 升级 Typeless 后听写能开关、但「按下发送」卡住 | Typeless 改了数据库结构（如 `history` → `history_v2`，完成状态 `transcript` → `completed`），旧脚本查错表、永远读不到转写 | 执行 `npx github:Johnixr/dji-mic-dictation update`。调试日志里 `save` 那行随后应出现 `table=history_v2`；若更新版 Typeless 再次迁移，欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
-| 发送逻辑不对或者还是旧脚本 | 已安装版本太旧 | 拉最新仓库后执行 `npx github:Johnixr/dji-mic-dictation update` |
+| 升级 Typeless 后听写能开关、但「按下发送」卡住 | Typeless 改了数据库结构（如 `history` → `history_v2`，完成状态 `transcript` → `completed`），旧脚本查错表、永远读不到转写 | 执行 `npx github:johnixr/dji-mic-dictation update`。调试日志里 `save` 那行随后应出现 `table=history_v2`；若更新版 Typeless 再次迁移，欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
+| 发送逻辑不对或者还是旧脚本 | 已安装版本太旧 | 拉最新仓库后执行 `npx github:johnixr/dji-mic-dictation update` |
 
 ### 权限清单
 

@@ -11,7 +11,7 @@ Works with any app that accepts text input: Claude Code, WeChat, Feishu/Lark, Te
 Run the installer directly:
 
 ```bash
-npx github:Johnixr/dji-mic-dictation install
+npx github:johnixr/dji-mic-dictation install
 ```
 
 The installer checks for a connected DJI Mic Mini automatically:
@@ -22,10 +22,10 @@ The installer checks for a connected DJI Mic Mini automatically:
 Useful follow-up commands:
 
 ```bash
-npx github:Johnixr/dji-mic-dictation update
-npx github:Johnixr/dji-mic-dictation doctor
-npx github:Johnixr/dji-mic-dictation config
-npx github:Johnixr/dji-mic-dictation uninstall
+npx github:johnixr/dji-mic-dictation update
+npx github:johnixr/dji-mic-dictation doctor
+npx github:johnixr/dji-mic-dictation config
+npx github:johnixr/dji-mic-dictation uninstall
 ```
 
 Use the CLI as the default path. If you want an AI assistant to help, have it call the same CLI instead of reimplementing the setup steps.
@@ -49,7 +49,7 @@ You can use the workflow with the keyboard alone. If you also have a DJI Mic Min
 ### Step 3: Run the installer
 
 ```bash
-npx github:Johnixr/dji-mic-dictation install
+npx github:johnixr/dji-mic-dictation install
 ```
 
 ## How it works
@@ -114,13 +114,13 @@ cat /tmp/dji-dictation/debug.log
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | The optional hardware button does nothing | Karabiner can't see the device | Grant **Input Monitoring** permission to Karabiner in System Settings → Privacy & Security |
-| The optional hardware button changes volume instead of dictation | The installer did not detect the device when you installed, so only the keyboard workflow was configured | Re-run `npx github:Johnixr/dji-mic-dictation install` with the DJI receiver connected |
+| The optional hardware button changes volume instead of dictation | The installer did not detect the device when you installed, so only the keyboard workflow was configured | Re-run `npx github:johnixr/dji-mic-dictation install` with the DJI receiver connected |
 | Dictation works but no sound / no ready overlay | Accessibility permission missing | Grant **Accessibility** permission to `/usr/bin/osascript` (or the terminal app running the script) |
-| Sound plays but overlay doesn't appear | The ready overlay requires a compiled Swift binary; run `npx github:Johnixr/dji-mic-dictation update` to refresh. Some apps have non-standard windows (e.g. Electron overlay); already handled for Feishu/Lark; [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) for other apps |
-| CLI says Typeless DB is missing | Typeless is not installed or has never been opened | Install Typeless, launch it once, then run `npx github:Johnixr/dji-mic-dictation install` or `npx github:Johnixr/dji-mic-dictation doctor` again |
+| Sound plays but overlay doesn't appear | The ready overlay requires a compiled Swift binary; run `npx github:johnixr/dji-mic-dictation update` to refresh. Some apps have non-standard windows (e.g. Electron overlay); already handled for Feishu/Lark; [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) for other apps |
+| CLI says Typeless DB is missing | Typeless is not installed or has never been opened | Install Typeless, launch it once, then run `npx github:johnixr/dji-mic-dictation install` or `npx github:johnixr/dji-mic-dictation doctor` again |
 | Overlay shows but Enter doesn't send | Terminal app needs Accessibility permission | Grant **Accessibility** to your terminal (iTerm2 / Terminal.app) |
-| Dictation starts/stops fine but press-to-send hangs after a Typeless update | Typeless changed its database schema (e.g. `history` → `history_v2`, done status `transcript` → `completed`); a stale script polls the old table and never sees the transcript | Run `npx github:Johnixr/dji-mic-dictation update`. The `save` line in the debug log should then show `table=history_v2`; if a newer Typeless migrates again, [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
-| Enter sends to wrong app | Old build or stale install | Run `npx github:Johnixr/dji-mic-dictation update` from the latest repo version |
+| Dictation starts/stops fine but press-to-send hangs after a Typeless update | Typeless changed its database schema (e.g. `history` → `history_v2`, done status `transcript` → `completed`); a stale script polls the old table and never sees the transcript | Run `npx github:johnixr/dji-mic-dictation update`. The `save` line in the debug log should then show `table=history_v2`; if a newer Typeless migrates again, [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
+| Enter sends to wrong app | Old build or stale install | Run `npx github:johnixr/dji-mic-dictation update` from the latest repo version |
 
 ### Permissions checklist
 

@@ -53,7 +53,7 @@ Default to the CLI instead of manually editing files.
 ### Install
 
 ```bash
-npx github:Johnixr/dji-mic-dictation install
+npx github:johnixr/dji-mic-dictation install
 ```
 
 The installer should check for a connected DJI Mic Mini automatically:
@@ -74,7 +74,7 @@ The CLI is responsible for:
 ### Update
 
 ```bash
-npx github:Johnixr/dji-mic-dictation update
+npx github:johnixr/dji-mic-dictation update
 ```
 
 Use this when the repo script or Karabiner rule changes. It should refresh the installed script/rules while preserving the user's config.
@@ -84,7 +84,7 @@ Unless explicitly overridden, `update` should preserve both the existing trigger
 ### Doctor
 
 ```bash
-npx github:Johnixr/dji-mic-dictation doctor
+npx github:johnixr/dji-mic-dictation doctor
 ```
 
 Use this to inspect Typeless DB presence, Karabiner config state, installed script/config files, connected device status, and whether an update is needed.
@@ -94,7 +94,7 @@ Only treat device connection as relevant when the optional DJI trigger mode is e
 ### Config
 
 ```bash
-npx github:Johnixr/dji-mic-dictation config
+npx github:johnixr/dji-mic-dictation config
 ```
 
 Use this to change audio feedback and ready overlay settings.
@@ -102,7 +102,7 @@ Use this to change audio feedback and ready overlay settings.
 ### Uninstall
 
 ```bash
-npx github:Johnixr/dji-mic-dictation uninstall
+npx github:johnixr/dji-mic-dictation uninstall
 ```
 
 This should remove only the managed script/config/Karabiner entries, without clobbering unrelated user settings.
@@ -133,8 +133,8 @@ If the user reports issues, check these in order:
 1. **Button does nothing** → Karabiner needs **Input Monitoring** permission. Check System Settings → Privacy & Security → Input Monitoring.
 2. **Optional hardware button changes volume instead of triggering dictation** → The optional DJI trigger mode was not enabled, or the device is not grabbed. Verify `"is_consumer": true, "ignore": false` in karabiner.json devices when the optional trigger is enabled.
 3. **No sound / no ready overlay after dictation** → `/usr/bin/osascript` or the terminal app needs **Accessibility** permission. Check System Settings → Privacy & Security → Accessibility.
-4. **Sound plays but overlay doesn't appear** → The ready overlay requires a compiled Swift binary. Run `npx github:Johnixr/dji-mic-dictation update` to refresh. Some Electron apps (like Feishu/Lark) have invisible overlay windows; the script already filters for `AXStandardWindow`.
-5. **CLI reports missing Typeless DB** → Typeless is not installed or has never been opened. Install/open Typeless once, then rerun `npx github:Johnixr/dji-mic-dictation install` or `npx github:Johnixr/dji-mic-dictation doctor`.
+4. **Sound plays but overlay doesn't appear** → The ready overlay requires a compiled Swift binary. Run `npx github:johnixr/dji-mic-dictation update` to refresh. Some Electron apps (like Feishu/Lark) have invisible overlay windows; the script already filters for `AXStandardWindow`.
+5. **CLI reports missing Typeless DB** → Typeless is not installed or has never been opened. Install/open Typeless once, then rerun `npx github:johnixr/dji-mic-dictation install` or `npx github:johnixr/dji-mic-dictation doctor`.
 6. **Enter doesn't send** → Terminal app (iTerm2 / Terminal.app) needs **Accessibility** permission.
 
 ### Required permissions checklist
