@@ -15,6 +15,8 @@ LOG="${LOG:-$STATE_DIR/debug.log}"
 TMUX_BIN="${TMUX_BIN:-$(command -v tmux 2>/dev/null || echo /opt/homebrew/bin/tmux)}"
 KCLI="${KCLI:-/Library/Application Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli}"
 TYPELESS_DB="${TYPELESS_DB:-$HOME/Library/Application Support/Typeless/typeless.db}"
+TYPELESS_TABLE="${TYPELESS_TABLE:-}"
+TYPELESS_DONE_STATUS="${TYPELESS_DONE_STATUS:-}"
 CONFIRM_WINDOW="${CONFIRM_WINDOW:-3}"
 WAIT_PHASE_DURATION="${WAIT_PHASE_DURATION:-2}"
 PRECONFIRM_GRACE_INTERVAL="${PRECONFIRM_GRACE_INTERVAL:-0.02}"
@@ -967,28 +969,47 @@ active_tmux_pane() {
 		awk '$1==1 && $2==1 && $3==1 {print $4; exit}'
 }
 
+# Typeless 1.6.x migrated transcripts from the legacy `history` table (done
+# status `transcript`) to `history_v2` (done status `completed`). Pick the table
+# and done-status at runtime so the workflow survives either schema. Env vars
+# override detection (used by tests).
+detect_typeless_schema() {
+	if [ -n "$TYPELESS_TABLE" ] && [ -n "$TYPELESS_DONE_STATUS" ]; then
+		return 0
+	fi
+	local has_v2
+	has_v2="$(sqlite3 "$TYPELESS_DB" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_v2' LIMIT 1;" 2>/dev/null)"
+	if [ "$has_v2" = "1" ]; then
+		TYPELESS_TABLE="${TYPELESS_TABLE:-history_v2}"
+		TYPELESS_DONE_STATUS="${TYPELESS_DONE_STATUS:-completed}"
+	else
+		TYPELESS_TABLE="${TYPELESS_TABLE:-history}"
+		TYPELESS_DONE_STATUS="${TYPELESS_DONE_STATUS:-transcript}"
+	fi
+}
+
 typeless_last_rowid() {
-	sqlite3 "$TYPELESS_DB" "SELECT COALESCE(MAX(rowid), 0) FROM history;" 2>/dev/null
+	sqlite3 "$TYPELESS_DB" "SELECT COALESCE(MAX(rowid), 0) FROM ${TYPELESS_TABLE};" 2>/dev/null
 }
 
 typeless_row_updated_at() {
 	local rowid="$1"
 	sqlite3 "$TYPELESS_DB" \
-		"SELECT COALESCE(updated_at, '') FROM history WHERE rowid = ${rowid:-0} LIMIT 1;" 2>/dev/null
+		"SELECT COALESCE(updated_at, '') FROM ${TYPELESS_TABLE} WHERE rowid = ${rowid:-0} LIMIT 1;" 2>/dev/null
 }
 
 typeless_check_done() {
 	local anchor_rowid="$1"
 	local anchor_updated_at="$2"
 	sqlite3 "$TYPELESS_DB" \
-		"SELECT status FROM history WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND status IN ('transcript','dismissed') ORDER BY rowid ASC LIMIT 1;" 2>/dev/null
+		"SELECT status FROM ${TYPELESS_TABLE} WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND status IN ('${TYPELESS_DONE_STATUS}','dismissed') ORDER BY rowid ASC LIMIT 1;" 2>/dev/null
 }
 
 typeless_has_record() {
 	local anchor_rowid="$1"
 	local anchor_updated_at="$2"
 	sqlite3 "$TYPELESS_DB" \
-		"SELECT 1 FROM history WHERE rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}') LIMIT 1;" 2>/dev/null
+		"SELECT 1 FROM ${TYPELESS_TABLE} WHERE rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}') LIMIT 1;" 2>/dev/null
 }
 
 typeless_check_stale() {
@@ -996,7 +1017,7 @@ typeless_check_stale() {
 	local anchor_updated_at="$2"
 	local stale_seconds="$STALE_SECONDS"
 	sqlite3 "$TYPELESS_DB" \
-		"SELECT 1 FROM history WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
+		"SELECT 1 FROM ${TYPELESS_TABLE} WHERE (rowid > ${anchor_rowid:-0} OR (rowid = ${anchor_rowid:-0} AND COALESCE(updated_at, '') > '${anchor_updated_at}')) AND COALESCE(status, '') = '' AND (julianday('now') - julianday(updated_at)) * 86400 > $stale_seconds LIMIT 1;" 2>/dev/null
 }
 
 gui_send_enter() {
@@ -1031,7 +1052,7 @@ transcript_ready_since_save() {
 	[ -n "$anchor_rowid" ] || anchor_rowid=0
 	anchor_updated_at="$(read_file db_anchor_updated_at)"
 	done_status="$(typeless_check_done "$anchor_rowid" "$anchor_updated_at")"
-	[ "$done_status" = "transcript" ]
+	[ "$done_status" = "$TYPELESS_DONE_STATUS" ]
 }
 
 send_current_mode_enter() {
@@ -1067,6 +1088,8 @@ send_current_mode_enter() {
 	log "$source unknown mode"
 	return 1
 }
+
+detect_typeless_schema
 
 if [ "$1" = "route" ]; then
 	branch="$2"
@@ -1108,9 +1131,9 @@ save)
 	esac
 
 	if [ -n "$pane" ]; then
-		log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
+		log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} table=${TYPELESS_TABLE}"
 	else
-		log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at}"
+		log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} table=${TYPELESS_TABLE}"
 	fi
 	prepare_send_window_hud_if_enabled
 	write_file save_ts "$save_ts"
@@ -1175,7 +1198,7 @@ watch)
 			fi
 		done
 
-		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+		if [ $changed -eq 1 ] && [ "$done_status" = "$TYPELESS_DONE_STATUS" ]; then
 			session_is_current "$watch_session_id" || exit 0
 			log "watch tmux transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then
@@ -1238,7 +1261,7 @@ watch)
 			fi
 		done
 
-		if [ $changed -eq 1 ] && [ "$done_status" = "transcript" ]; then
+		if [ $changed -eq 1 ] && [ "$done_status" = "$TYPELESS_DONE_STATUS" ]; then
 			session_is_current "$watch_session_id" || exit 0
 			log "watch gui transcript_detected (${i} polls ~$((i / 10))s) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
 			if wait_for_pending_confirm; then

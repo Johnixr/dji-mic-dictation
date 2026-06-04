@@ -33,8 +33,14 @@ class HistoryRow:
 
 
 class DictationHarness:
-    def __init__(self, tmp_path: Path):
+    def __init__(self, tmp_path: Path, schema: str = "legacy"):
         self.tmp_path = tmp_path
+        # Typeless 1.6.x moved transcripts from `history` (done=transcript) to
+        # `history_v2` (done=completed). The harness can model either schema so we
+        # keep regression coverage for both the legacy and the migrated database.
+        self.schema = schema
+        self.table = "history_v2" if schema == "v2" else "history"
+        self.done_status = "completed" if schema == "v2" else "transcript"
         self.state_dir = tmp_path / "state"
         self.state_dir.mkdir()
         self.log_file = self.state_dir / "debug.log"
@@ -92,16 +98,29 @@ class DictationHarness:
 
     def _create_db(self):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE history (
-                    status TEXT,
-                    created_at TEXT,
-                    updated_at TEXT,
-                    refined_text TEXT
+            if self.schema == "v2":
+                conn.execute(
+                    """
+                    CREATE TABLE history_v2 (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        status TEXT,
+                        created_at TEXT,
+                        updated_at TEXT,
+                        refined_text TEXT
+                    )
+                    """
                 )
-                """
-            )
+            else:
+                conn.execute(
+                    """
+                    CREATE TABLE history (
+                        status TEXT,
+                        created_at TEXT,
+                        updated_at TEXT,
+                        refined_text TEXT
+                    )
+                    """
+                )
 
     def _write_executable(self, name: str, content: str):
         path = self.bin_dir / name
@@ -281,10 +300,16 @@ elif args[:2] == ["-l", "JavaScript"]:
         created_at = created_at or iso_timestamp(-1)
         updated_at = updated_at or created_at
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                "INSERT INTO history (status, created_at, updated_at, refined_text) VALUES (?, ?, ?, ?)",
-                (status, created_at, updated_at, refined_text),
-            )
+            if self.schema == "v2":
+                cursor = conn.execute(
+                    "INSERT INTO history_v2 (id, status, created_at, updated_at, refined_text) VALUES (?, ?, ?, ?, ?)",
+                    (uuid.uuid4().hex, status, created_at, updated_at, refined_text),
+                )
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO history (status, created_at, updated_at, refined_text) VALUES (?, ?, ?, ?)",
+                    (status, created_at, updated_at, refined_text),
+                )
             rowid = cursor.lastrowid
         return HistoryRow(rowid=rowid, status=status, created_at=created_at, updated_at=updated_at, refined_text=refined_text)
 
@@ -304,12 +329,12 @@ elif args[:2] == ["-l", "JavaScript"]:
             return
         values.append(rowid)
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(f"UPDATE history SET {', '.join(fields)} WHERE rowid = ?", values)
+            conn.execute(f"UPDATE {self.table} SET {', '.join(fields)} WHERE rowid = ?", values)
 
     def get_history(self, rowid):
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT rowid, COALESCE(status, ''), created_at, updated_at, COALESCE(refined_text, '') FROM history WHERE rowid = ?",
+                f"SELECT rowid, COALESCE(status, ''), created_at, updated_at, COALESCE(refined_text, '') FROM {self.table} WHERE rowid = ?",
                 (rowid,),
             ).fetchone()
         return HistoryRow(*row)
@@ -434,6 +459,11 @@ raise SystemExit(proc.returncode)
 @pytest.fixture
 def harness(tmp_path):
     return DictationHarness(tmp_path)
+
+
+@pytest.fixture
+def v2_harness(tmp_path):
+    return DictationHarness(tmp_path, schema="v2")
 
 
 @pytest.fixture
