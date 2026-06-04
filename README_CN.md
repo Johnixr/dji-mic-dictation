@@ -118,6 +118,7 @@ cat /tmp/dji-dictation/debug.log
 | 有提示音但浮层不出现 | 就绪浮层需要编译 Swift 二进制；执行 `npx github:Johnixr/dji-mic-dictation update` 刷新。部分 App 有非标准窗口（如 Electron 水印层），飞书已适配；其他 App 欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
 | CLI 提示找不到 Typeless DB | Typeless 没安装或还没打开过 | 安装 Typeless，至少打开一次，再重新执行 `npx github:Johnixr/dji-mic-dictation install` 或 `npx github:Johnixr/dji-mic-dictation doctor` |
 | 浮层出现但 Enter 没发出去 | 终端 App 缺少辅助功能权限 | 系统设置 → 隐私与安全 → 辅助功能，给 iTerm2 / Terminal.app 授权 |
+| 升级 Typeless 后听写能开关、但「按下发送」卡住 | Typeless 改了数据库结构（如 `history` → `history_v2`，完成状态 `transcript` → `completed`），旧脚本查错表、永远读不到转写 | 执行 `npx github:Johnixr/dji-mic-dictation update`。调试日志里 `save` 那行随后应出现 `table=history_v2`；若更新版 Typeless 再次迁移，欢迎[提 Issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
 | 发送逻辑不对或者还是旧脚本 | 已安装版本太旧 | 拉最新仓库后执行 `npx github:Johnixr/dji-mic-dictation update` |
 
 ### 权限清单

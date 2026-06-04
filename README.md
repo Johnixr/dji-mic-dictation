@@ -119,6 +119,7 @@ cat /tmp/dji-dictation/debug.log
 | Sound plays but overlay doesn't appear | The ready overlay requires a compiled Swift binary; run `npx github:Johnixr/dji-mic-dictation update` to refresh. Some apps have non-standard windows (e.g. Electron overlay); already handled for Feishu/Lark; [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) for other apps |
 | CLI says Typeless DB is missing | Typeless is not installed or has never been opened | Install Typeless, launch it once, then run `npx github:Johnixr/dji-mic-dictation install` or `npx github:Johnixr/dji-mic-dictation doctor` again |
 | Overlay shows but Enter doesn't send | Terminal app needs Accessibility permission | Grant **Accessibility** to your terminal (iTerm2 / Terminal.app) |
+| Dictation starts/stops fine but press-to-send hangs after a Typeless update | Typeless changed its database schema (e.g. `history` → `history_v2`, done status `transcript` → `completed`); a stale script polls the old table and never sees the transcript | Run `npx github:Johnixr/dji-mic-dictation update`. The `save` line in the debug log should then show `table=history_v2`; if a newer Typeless migrates again, [open an issue](https://github.com/Johnixr/dji-mic-dictation/issues) |
 | Enter sends to wrong app | Old build or stale install | Run `npx github:Johnixr/dji-mic-dictation update` from the latest repo version |
 
 ### Permissions checklist
