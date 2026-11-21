@@ -362,6 +362,7 @@ export async function uninstall(runtime) {
 	await removeIfExists(runtime.scriptTargetPath);
 	await removeIfExists(runtime.configFilePath);
 	await removeIfExists(runtime.manifestFilePath);
+	await fs.rm(runtime.hudDirPath, { force: true, recursive: true });
 
 	try {
 		await fs.rmdir(runtime.configDir);

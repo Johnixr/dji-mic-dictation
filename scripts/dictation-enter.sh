@@ -39,6 +39,9 @@ AFPLAY_BIN="${AFPLAY_BIN:-/usr/bin/afplay}"
 SWIFTC_BIN="${SWIFTC_BIN:-$(command -v swiftc 2>/dev/null)}"
 DJI_CONFIG_DIR="${DJI_CONFIG_DIR:-$HOME/.config/dji-mic-dictation}"
 DJI_CONFIG_FILE="${DJI_CONFIG_FILE:-$DJI_CONFIG_DIR/config.env}"
+# Compiled HUD artifacts live next to the config so they survive reboots and
+# `/tmp` cleanups; only per-run state stays in STATE_DIR.
+HUD_DIR="${DJI_HUD_DIR:-$DJI_CONFIG_DIR/hud}"
 DJI_ENABLE_AUDIO_FEEDBACK="${DJI_ENABLE_AUDIO_FEEDBACK:-1}"
 DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-ready}"
 DJI_REVIEW_WINDOW_SECONDS="${DJI_REVIEW_WINDOW_SECONDS:-}"
@@ -48,8 +51,8 @@ if [ -z "$SOUNDS_DIR" ]; then
 	[ -d "$_sd" ] && SOUNDS_DIR="$_sd" || SOUNDS_DIR="$HOME/.config/dji-mic-dictation/sounds"
 fi
 DJI_ENABLE_READY_HUD="${DJI_ENABLE_READY_HUD:-1}"
-HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$STATE_DIR/send-window-hud.swift}"
-HUD_BIN="${HUD_BIN:-$STATE_DIR/send-window-hud}"
+HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$HUD_DIR/send-window-hud.swift}"
+HUD_BIN="${HUD_BIN:-$HUD_DIR/send-window-hud}"
 HUD_DAEMON_PID_FILE="${HUD_DAEMON_PID_FILE:-$STATE_DIR/send-window-hud.pid}"
 HUD_DAEMON_COMMAND_FILE="${HUD_DAEMON_COMMAND_FILE:-$STATE_DIR/send-window-hud.command}"
 HUD_DAEMON_READY_FILE="${HUD_DAEMON_READY_FILE:-$STATE_DIR/send-window-hud.ready}"
@@ -518,6 +521,7 @@ ensure_send_window_hud_binary() {
 		log "hud compile skipped: swiftc_missing"
 		return 1
 	}
+	/bin/mkdir -p "$HUD_DIR"
 	local tmp_source
 	tmp_source="$STATE_DIR/send-window-hud.$$.swift.tmp"
 	write_send_window_hud_source "$tmp_source"
