@@ -142,6 +142,7 @@ test('install auto-enables the optional DJI trigger when the device is connected
 		preconfirmSoundName: 'Sosumi',
 		readyOverlayEnabled: false,
 		reviewWindowSeconds: 3,
+		transcriptionEngine: 'typeless',
 	});
 
 	const installedScript = await fs.readFile(fixture.runtime.scriptTargetPath, 'utf-8');
@@ -317,6 +318,7 @@ test('update refreshes manifest version and preserves config', async () => {
 		preconfirmSoundName: 'Sosumi',
 		readyOverlayEnabled: true,
 		reviewWindowSeconds: 3,
+		transcriptionEngine: 'typeless',
 	});
 
 	const karabinerConfig = JSON.parse(await fs.readFile(fixture.karabinerConfigPath, 'utf-8'));
