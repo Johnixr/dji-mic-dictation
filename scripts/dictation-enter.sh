@@ -275,15 +275,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 		let view = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
 		view.wantsLayer = true
-		view.layer?.backgroundColor = NSColor(red: 0, green: 0, blue: 0, alpha: 1).cgColor
+		view.layer?.backgroundColor = NSColor(red: 0.79, green: 0.95, blue: 0.82, alpha: 0.97).cgColor
 		view.layer?.cornerRadius = cornerRadius
 		view.layer?.borderWidth = 1
-		view.layer?.borderColor = NSColor(white: 1, alpha: 0.18).cgColor
+		view.layer?.borderColor = NSColor(red: 0.16, green: 0.58, blue: 0.33, alpha: 0.72).cgColor
 		view.layer?.masksToBounds = true
 		panel.contentView = view
 
-		let fillColor = NSColor(red: 242/255, green: 241/255, blue: 240/255, alpha: 0.25)
-		let textColor = NSColor(red: 242/255, green: 241/255, blue: 240/255, alpha: 0.56)
+		let fillColor = NSColor(red: 0.24, green: 0.70, blue: 0.42, alpha: 0.34)
+		let textColor = NSColor(red: 0.05, green: 0.31, blue: 0.16, alpha: 1)
 
 		let progressFillLayer = CALayer()
 		progressFillLayer.anchorPoint = CGPoint(x: 0, y: 0.5)
