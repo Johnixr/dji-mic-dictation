@@ -39,9 +39,11 @@ AFPLAY_BIN="${AFPLAY_BIN:-/usr/bin/afplay}"
 SWIFTC_BIN="${SWIFTC_BIN:-$(command -v swiftc 2>/dev/null)}"
 DJI_CONFIG_DIR="${DJI_CONFIG_DIR:-$HOME/.config/dji-mic-dictation}"
 DJI_CONFIG_FILE="${DJI_CONFIG_FILE:-$DJI_CONFIG_DIR/config.env}"
-DJI_ENGINE_DIR="${DJI_ENGINE_DIR:-$DJI_CONFIG_DIR/hud}"
-ASR_ACTIVE_SWIFT_SOURCE="${ASR_ACTIVE_SWIFT_SOURCE:-$DJI_ENGINE_DIR/asr-active.swift}"
-ASR_ACTIVE_BIN="${ASR_ACTIVE_BIN:-$DJI_ENGINE_DIR/asr-active}"
+# Compiled Swift helpers live next to the config so they survive reboots and
+# `/tmp` cleanups; only per-run state stays in STATE_DIR.
+HUD_DIR="${DJI_HUD_DIR:-$DJI_CONFIG_DIR/hud}"
+ASR_ACTIVE_SWIFT_SOURCE="${ASR_ACTIVE_SWIFT_SOURCE:-$HUD_DIR/asr-active.swift}"
+ASR_ACTIVE_BIN="${ASR_ACTIVE_BIN:-$HUD_DIR/asr-active}"
 ASR_POLL_INTERVAL="${ASR_POLL_INTERVAL:-0.1}"
 ASR_STOP_POLLS="${ASR_STOP_POLLS:-100}"
 DJI_ENABLE_AUDIO_FEEDBACK="${DJI_ENABLE_AUDIO_FEEDBACK:-1}"
@@ -53,8 +55,8 @@ if [ -z "$SOUNDS_DIR" ]; then
 	[ -d "$_sd" ] && SOUNDS_DIR="$_sd" || SOUNDS_DIR="$HOME/.config/dji-mic-dictation/sounds"
 fi
 DJI_ENABLE_READY_HUD="${DJI_ENABLE_READY_HUD:-1}"
-HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$STATE_DIR/send-window-hud.swift}"
-HUD_BIN="${HUD_BIN:-$STATE_DIR/send-window-hud}"
+HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$HUD_DIR/send-window-hud.swift}"
+HUD_BIN="${HUD_BIN:-$HUD_DIR/send-window-hud}"
 HUD_DAEMON_PID_FILE="${HUD_DAEMON_PID_FILE:-$STATE_DIR/send-window-hud.pid}"
 HUD_DAEMON_COMMAND_FILE="${HUD_DAEMON_COMMAND_FILE:-$STATE_DIR/send-window-hud.command}"
 HUD_DAEMON_READY_FILE="${HUD_DAEMON_READY_FILE:-$STATE_DIR/send-window-hud.ready}"
@@ -523,6 +525,7 @@ ensure_send_window_hud_binary() {
 		log "hud compile skipped: swiftc_missing"
 		return 1
 	}
+	/bin/mkdir -p "$HUD_DIR"
 	local tmp_source
 	tmp_source="$STATE_DIR/send-window-hud.$$.swift.tmp"
 	write_send_window_hud_source "$tmp_source"
@@ -711,7 +714,7 @@ ensure_asr_active_binary() {
 		log "asr detector compile skipped: swiftc_missing"
 		return 1
 	}
-	/bin/mkdir -p "$DJI_ENGINE_DIR"
+	/bin/mkdir -p "$HUD_DIR"
 	local tmp_source="$STATE_DIR/asr-active.$$.swift.tmp"
 	write_asr_active_source "$tmp_source"
 	if [ ! -f "$ASR_ACTIVE_SWIFT_SOURCE" ] || ! cmp -s "$tmp_source" "$ASR_ACTIVE_SWIFT_SOURCE"; then

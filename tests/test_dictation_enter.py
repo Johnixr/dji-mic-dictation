@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 import threading
@@ -518,7 +519,7 @@ def test_save_prepares_ready_hud_before_watch_to_avoid_cold_start_delay(harness)
 
     harness.run("save")
     compile_count_after_save = len(harness.swiftc_calls())
-    hud_source = (harness.state_dir / "send-window-hud.swift").read_text(encoding="utf-8")
+    hud_source = (harness.hud_dir / "send-window-hud.swift").read_text(encoding="utf-8")
     assert any(call.startswith("--daemon ") for call in _wait_for_hud_warmup(harness))
 
     def insert_transcript():
@@ -632,7 +633,7 @@ def test_watch_rebuilds_hud_when_binary_cache_is_missing(harness):
 
     harness.run("save")
     compile_count_after_save = len(harness.swiftc_calls())
-    (harness.state_dir / "send-window-hud").unlink()
+    (harness.hud_dir / "send-window-hud").unlink()
 
     def insert_transcript():
         time.sleep(0.05)
@@ -647,6 +648,29 @@ def test_watch_rebuilds_hud_when_binary_cache_is_missing(harness):
     assert proc.returncode == 0, (stdout, stderr)
     assert len(harness.swiftc_calls()) == compile_count_after_save + 1
     assert any(_is_send_window_hud_call(call) for call in _visible_send_window_hud_calls(harness))
+
+
+def test_hud_cache_survives_state_dir_cleanup(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    compile_count_after_save = len(harness.swiftc_calls())
+    assert compile_count_after_save == 1
+    assert (harness.hud_dir / "send-window-hud.swift").exists()
+    assert (harness.hud_dir / "send-window-hud").exists()
+
+    shutil.rmtree(harness.state_dir)
+
+    harness.run("save")
+
+    assert len(harness.swiftc_calls()) == compile_count_after_save
+    assert (harness.hud_dir / "send-window-hud.swift").exists()
+    assert (harness.hud_dir / "send-window-hud").exists()
 
 
 def test_preconfirm_plays_sound_but_does_not_show_ready_hud(harness):

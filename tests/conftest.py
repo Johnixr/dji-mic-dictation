@@ -48,6 +48,7 @@ class DictationHarness:
         self.home_dir = tmp_path / "home"
         self.home_dir.mkdir()
         self.config_dir = self.home_dir / ".config" / "dji-mic-dictation"
+        self.hud_dir = self.config_dir / "hud"
         self.bin_dir = tmp_path / "bin"
         self.bin_dir.mkdir()
         self.tmux_log = tmp_path / "tmux.log"

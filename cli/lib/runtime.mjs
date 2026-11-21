@@ -31,7 +31,7 @@ export function createRuntime({ env = process.env } = {}) {
 		configDir,
 		configFilePath: env.DJI_CONFIG_FILE || path.join(configDir, 'config.env'),
 		manifestFilePath: env.DJI_INSTALLER_MANIFEST || path.join(configDir, 'install-state.json'),
-		engineDirPath: env.DJI_ENGINE_DIR || path.join(configDir, 'hud'),
+		hudDirPath: env.DJI_HUD_DIR || path.join(configDir, 'hud'),
 		karabinerDir,
 		karabinerConfigPath: env.DJI_KARABINER_CONFIG || path.join(karabinerDir, 'karabiner.json'),
 		karabinerScriptsDir,
