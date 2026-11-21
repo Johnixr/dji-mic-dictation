@@ -5,7 +5,10 @@ export const DEFAULT_CONFIG = Object.freeze({
 	preconfirmSoundName: 'Sosumi',
 	readyOverlayEnabled: true,
 	reviewWindowSeconds: 3,
+	transcriptionEngine: 'typeless',
 });
+
+export const TRANSCRIPTION_ENGINES = Object.freeze(['typeless', 'doubao']);
 
 function parseBoolean(value, fallback) {
 	if (value == null || value === '') {
@@ -55,7 +58,16 @@ export function normalizeConfig(config = {}) {
 		preconfirmSoundName,
 		readyOverlayEnabled: parseBoolean(config.readyOverlayEnabled, DEFAULT_CONFIG.readyOverlayEnabled),
 		reviewWindowSeconds: parsePositiveNumber(config.reviewWindowSeconds, DEFAULT_CONFIG.reviewWindowSeconds),
+		transcriptionEngine: parseTranscriptionEngine(config.transcriptionEngine),
 	};
+}
+
+function parseTranscriptionEngine(value) {
+	if (value == null || value === '') {
+		return DEFAULT_CONFIG.transcriptionEngine;
+	}
+	const normalized = String(value).trim().toLowerCase();
+	return TRANSCRIPTION_ENGINES.includes(normalized) ? normalized : DEFAULT_CONFIG.transcriptionEngine;
 }
 
 function parseEnvFile(text) {
@@ -103,6 +115,7 @@ export async function loadConfig(runtime) {
 			preconfirmSoundName: env.DJI_PRECONFIRM_SOUND_NAME,
 			readyOverlayEnabled: env.DJI_ENABLE_READY_HUD,
 			reviewWindowSeconds: env.DJI_REVIEW_WINDOW_SECONDS,
+			transcriptionEngine: env.DJI_TRANSCRIPTION_ENGINE,
 		});
 	} catch (error) {
 		if (error.code === 'ENOENT') {
@@ -121,6 +134,7 @@ export async function writeConfig(runtime, config) {
 		`DJI_PRECONFIRM_SOUND_NAME=${serializeEnvString(normalized.preconfirmSoundName)}`,
 		`DJI_ENABLE_READY_HUD=${serializeEnvValue(normalized.readyOverlayEnabled)}`,
 		`DJI_REVIEW_WINDOW_SECONDS=${serializeEnvNumber(normalized.reviewWindowSeconds)}`,
+		`DJI_TRANSCRIPTION_ENGINE=${normalized.transcriptionEngine}`,
 		'',
 	].join('\n');
 	await fs.writeFile(runtime.configFilePath, content, 'utf-8');

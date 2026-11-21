@@ -51,8 +51,14 @@ function createCommandError(message, code) {
 	return error;
 }
 
-async function assertInstallationPrerequisites(runtime) {
-	if (!(await pathExists(runtime.typelessDbPath))) {
+async function resolveTranscriptionEngine(runtime, configOverrides = {}) {
+	const existingConfig = await loadConfig(runtime);
+	return mergeConfig(existingConfig, configOverrides).transcriptionEngine;
+}
+
+async function assertInstallationPrerequisites(runtime, { configOverrides } = {}) {
+	const transcriptionEngine = await resolveTranscriptionEngine(runtime, configOverrides);
+	if (transcriptionEngine !== 'doubao' && !(await pathExists(runtime.typelessDbPath))) {
 		throw createCommandError(
 			`Typeless DB not found at ${runtime.typelessDbPath}. Install/open Typeless first.`,
 			'TYPELESS_DB_MISSING',
@@ -300,7 +306,7 @@ export async function getKarabinerProfiles(runtime) {
 }
 
 export async function install(runtime, options = {}) {
-	await assertInstallationPrerequisites(runtime);
+	await assertInstallationPrerequisites(runtime, { configOverrides: options.configOverrides });
 
 	return syncInstallation(runtime, {
 		profileOptions: await resolveInstallProfileOptions(runtime, options),
@@ -311,7 +317,7 @@ export async function install(runtime, options = {}) {
 }
 
 export async function update(runtime, options = {}) {
-	await assertInstallationPrerequisites(runtime);
+	await assertInstallationPrerequisites(runtime, { configOverrides: options.configOverrides });
 
 	const manifest = await readManifest(runtime);
 	const templateRule = await loadRuleTemplate(runtime);
@@ -362,6 +368,7 @@ export async function uninstall(runtime) {
 	await removeIfExists(runtime.scriptTargetPath);
 	await removeIfExists(runtime.configFilePath);
 	await removeIfExists(runtime.manifestFilePath);
+	await fs.rm(runtime.hudDirPath, { force: true, recursive: true });
 
 	try {
 		await fs.rmdir(runtime.configDir);
@@ -378,6 +385,7 @@ export async function doctor(runtime) {
 	const karabinerConfigExists = await pathExists(runtime.karabinerConfigPath);
 	const karabinerCliExists = await pathExists(runtime.karabinerCliPath);
 	const typelessDbExists = await pathExists(runtime.typelessDbPath);
+	const { transcriptionEngine } = await loadConfig(runtime);
 	const scriptInstalled = await pathExists(runtime.scriptTargetPath);
 	const configInstalled = await pathExists(runtime.configFilePath);
 	const manifest = await readManifest(runtime);
@@ -416,6 +424,7 @@ export async function doctor(runtime) {
 		karabinerCliExists,
 		karabinerConfigExists,
 		typelessDbExists,
+		transcriptionEngine,
 		scriptInstalled,
 		configInstalled,
 		manifestExists: Boolean(manifest),

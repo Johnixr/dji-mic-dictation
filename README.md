@@ -32,11 +32,19 @@ Use the CLI as the default path. If you want an AI assistant to help, have it ca
 
 ## Quick start
 
-### Step 1: Install Typeless (required for the current workflow)
+### Step 1: Install a dictation engine
 
-[Typeless](https://www.typeless.com/?via=john-yin) adds an LLM layer on top of macOS dictation — it cleans up your speech, removes filler words, fixes grammar, and handles mixed Chinese/English seamlessly.
+The default engine is [Typeless](https://www.typeless.com/?via=john-yin). It adds an LLM layer on top of macOS dictation — it cleans up your speech, removes filler words, fixes grammar, and handles mixed Chinese/English seamlessly.
 
 Free tier: 4,000 characters/week. Pro: $12/month.
+
+If you already dictate with Doubao's built-in voice input (豆包语音输入法), you do not need Typeless. Install with the Doubao engine instead:
+
+```bash
+npx github:johnixr/dji-mic-dictation install --transcription-engine doubao
+```
+
+In Doubao mode the workflow detects the recording pill window instead of a transcript database. A press while Doubao still shows “正在优化识别效果” is queued, so it never closes the dictation panel by accident, and the ready window still opens when the stop cannot be confirmed.
 
 ### Step 2: Decide if you want an optional hardware trigger
 
@@ -64,6 +72,8 @@ No press? → auto-reset after 4 seconds, no side effects
 
 Optional: if you enable the DJI trigger during install, the Mic Mini button mirrors the same workflow.
 
+With `--transcription-engine doubao` the three presses stay the same: the first press starts Doubao dictation, the second stops it, and the ready overlay appears once the recording pill disappears.
+
 ## Prerequisites
 
 | Requirement | Notes |
@@ -72,7 +82,8 @@ Optional: if you enable the DJI trigger during install, the Mic Mini button mirr
 | [Karabiner-Elements](https://karabiner-elements.pqrs.org/) | `brew install --cask karabiner-elements` |
 | DJI Mic Mini | Optional hardware trigger; vendor_id: 11427, product_id: 16401 |
 | macOS Dictation | System Settings → Keyboard → Dictation → On |
-| [Typeless](https://www.typeless.com/?via=john-yin) | Required in the current version because detection relies on the Typeless DB |
+| [Typeless](https://www.typeless.com/?via=john-yin) | Default engine; detection reads the Typeless DB. Skip it by installing with `--transcription-engine doubao` |
+| Doubao voice input (豆包语音输入法) | Optional alternative engine when installed with `--transcription-engine doubao` |
 
 ## What's in this repo
 

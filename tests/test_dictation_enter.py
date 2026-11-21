@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 import threading
@@ -518,7 +519,7 @@ def test_save_prepares_ready_hud_before_watch_to_avoid_cold_start_delay(harness)
 
     harness.run("save")
     compile_count_after_save = len(harness.swiftc_calls())
-    hud_source = (harness.state_dir / "send-window-hud.swift").read_text(encoding="utf-8")
+    hud_source = (harness.hud_dir / "send-window-hud.swift").read_text(encoding="utf-8")
     assert any(call.startswith("--daemon ") for call in _wait_for_hud_warmup(harness))
 
     def insert_transcript():
@@ -632,7 +633,7 @@ def test_watch_rebuilds_hud_when_binary_cache_is_missing(harness):
 
     harness.run("save")
     compile_count_after_save = len(harness.swiftc_calls())
-    (harness.state_dir / "send-window-hud").unlink()
+    (harness.hud_dir / "send-window-hud").unlink()
 
     def insert_transcript():
         time.sleep(0.05)
@@ -647,6 +648,29 @@ def test_watch_rebuilds_hud_when_binary_cache_is_missing(harness):
     assert proc.returncode == 0, (stdout, stderr)
     assert len(harness.swiftc_calls()) == compile_count_after_save + 1
     assert any(_is_send_window_hud_call(call) for call in _visible_send_window_hud_calls(harness))
+
+
+def test_hud_cache_survives_state_dir_cleanup(harness):
+    harness.env["FAKE_FRONT_BUNDLE"] = "com.google.Chrome"
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=1,
+        DJI_PRECONFIRM_SOUND_NAME="Sosumi",
+        DJI_ENABLE_READY_HUD=1,
+    )
+
+    harness.run("save")
+    compile_count_after_save = len(harness.swiftc_calls())
+    assert compile_count_after_save == 1
+    assert (harness.hud_dir / "send-window-hud.swift").exists()
+    assert (harness.hud_dir / "send-window-hud").exists()
+
+    shutil.rmtree(harness.state_dir)
+
+    harness.run("save")
+
+    assert len(harness.swiftc_calls()) == compile_count_after_save
+    assert (harness.hud_dir / "send-window-hud.swift").exists()
+    assert (harness.hud_dir / "send-window-hud").exists()
 
 
 def test_preconfirm_plays_sound_but_does_not_show_ready_hud(harness):
@@ -935,3 +959,80 @@ def test_confirm_gui_sends_enter_and_cleans_up(harness):
         or "write text" in " ".join(call["args"])
         for call in calls
     )
+
+
+def _doubao_config(harness, **extra):
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=0,
+        DJI_PRECONFIRM_SOUND_NAME="",
+        DJI_ENABLE_READY_HUD=1,
+        DJI_TRANSCRIPTION_ENGINE="doubao",
+        **extra,
+    )
+
+
+def test_doubao_save_records_engine_without_reading_typeless(harness):
+    _doubao_config(harness)
+
+    harness.run("save")
+
+    assert harness.read_state("engine") == "doubao"
+    assert harness.read_state("db_anchor_rowid") == ""
+    assert "save mode=gui engine=doubao" in harness.log_text()
+    assert harness.tmux_calls() == []
+
+
+def test_doubao_watch_opens_ready_window_after_recording_stops(harness):
+    harness.env["WAIT_PHASE_DURATION"] = "0.1"
+    harness.env["CONFIRM_WINDOW"] = "0.3"
+    _doubao_config(harness)
+    harness.run("save")
+    harness.write_asr_sequence([0, 0, 0, 1])
+
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=3)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    assert "watch mode=gui engine=doubao" in log_text
+    assert "watch gui dictation_stopped" in log_text
+    assert _confirm_send_window_hud_calls(harness) == ["0.3"]
+
+
+def test_doubao_watch_arms_ready_window_even_when_stop_is_unconfirmed(harness):
+    harness.env["WAIT_PHASE_DURATION"] = "0.1"
+    harness.env["CONFIRM_WINDOW"] = "0.3"
+    harness.env["ASR_STOP_POLLS"] = "3"
+    harness.env["FAKE_ASR_EXIT"] = "0"
+    _doubao_config(harness)
+    harness.run("save")
+
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=3)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui dictation_stop_unconfirmed" in harness.log_text()
+    assert _confirm_send_window_hud_calls(harness) == ["0.3"]
+
+
+def test_doubao_preconfirm_queues_until_recording_stops(harness):
+    harness.env["CONFIRM_WINDOW"] = "0.3"
+    _doubao_config(harness)
+    harness.run("save")
+    harness.write_asr_sequence([0, 1])
+
+    harness.run("preconfirm")
+
+    assert "preconfirm queued" in harness.log_text()
+    assert harness.read_state("pending_confirm") == "1"
+    assert not any(
+        "keystroke return" in " ".join(call["args"]) or "write text" in " ".join(call["args"])
+        for call in harness.osascript_calls()
+    )
+
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=3)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui preconfirm_send" in harness.log_text()
+    assert harness.read_state("pending_confirm") == ""

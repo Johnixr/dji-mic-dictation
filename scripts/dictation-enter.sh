@@ -39,6 +39,13 @@ AFPLAY_BIN="${AFPLAY_BIN:-/usr/bin/afplay}"
 SWIFTC_BIN="${SWIFTC_BIN:-$(command -v swiftc 2>/dev/null)}"
 DJI_CONFIG_DIR="${DJI_CONFIG_DIR:-$HOME/.config/dji-mic-dictation}"
 DJI_CONFIG_FILE="${DJI_CONFIG_FILE:-$DJI_CONFIG_DIR/config.env}"
+# Compiled Swift helpers live next to the config so they survive reboots and
+# `/tmp` cleanups; only per-run state stays in STATE_DIR.
+HUD_DIR="${DJI_HUD_DIR:-$DJI_CONFIG_DIR/hud}"
+ASR_ACTIVE_SWIFT_SOURCE="${ASR_ACTIVE_SWIFT_SOURCE:-$HUD_DIR/asr-active.swift}"
+ASR_ACTIVE_BIN="${ASR_ACTIVE_BIN:-$HUD_DIR/asr-active}"
+ASR_POLL_INTERVAL="${ASR_POLL_INTERVAL:-0.1}"
+ASR_STOP_POLLS="${ASR_STOP_POLLS:-100}"
 DJI_ENABLE_AUDIO_FEEDBACK="${DJI_ENABLE_AUDIO_FEEDBACK:-1}"
 DJI_PRECONFIRM_SOUND_NAME="${DJI_PRECONFIRM_SOUND_NAME:-ready}"
 DJI_REVIEW_WINDOW_SECONDS="${DJI_REVIEW_WINDOW_SECONDS:-}"
@@ -48,8 +55,8 @@ if [ -z "$SOUNDS_DIR" ]; then
 	[ -d "$_sd" ] && SOUNDS_DIR="$_sd" || SOUNDS_DIR="$HOME/.config/dji-mic-dictation/sounds"
 fi
 DJI_ENABLE_READY_HUD="${DJI_ENABLE_READY_HUD:-1}"
-HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$STATE_DIR/send-window-hud.swift}"
-HUD_BIN="${HUD_BIN:-$STATE_DIR/send-window-hud}"
+HUD_SWIFT_SOURCE="${HUD_SWIFT_SOURCE:-$HUD_DIR/send-window-hud.swift}"
+HUD_BIN="${HUD_BIN:-$HUD_DIR/send-window-hud}"
 HUD_DAEMON_PID_FILE="${HUD_DAEMON_PID_FILE:-$STATE_DIR/send-window-hud.pid}"
 HUD_DAEMON_COMMAND_FILE="${HUD_DAEMON_COMMAND_FILE:-$STATE_DIR/send-window-hud.command}"
 HUD_DAEMON_READY_FILE="${HUD_DAEMON_READY_FILE:-$STATE_DIR/send-window-hud.ready}"
@@ -518,6 +525,7 @@ ensure_send_window_hud_binary() {
 		log "hud compile skipped: swiftc_missing"
 		return 1
 	}
+	/bin/mkdir -p "$HUD_DIR"
 	local tmp_source
 	tmp_source="$STATE_DIR/send-window-hud.$$.swift.tmp"
 	write_send_window_hud_source "$tmp_source"
@@ -657,7 +665,106 @@ confirm_send_window_hud_if_enabled() {
 	confirm_send_window_hud "$1" "$2"
 }
 
+write_asr_active_source() {
+	local output_path="$1"
+	cat >"$output_path" <<'SWIFT'
+import CoreGraphics
+import Foundation
+
+// Doubao keeps an off-screen layer-3 window while idle, so only a visible
+// recording pill of roughly this size counts as listening.
+let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+	exit(2)
+}
+
+for window in windows {
+	let owner = (window[kCGWindowOwnerName as String] as? String ?? "").lowercased()
+	guard owner.contains("doubao") || owner.contains("豆包") else {
+		continue
+	}
+	let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
+	guard layer == 3 else {
+		continue
+	}
+	let onscreen = (window[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false
+	guard onscreen else {
+		continue
+	}
+	guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+		let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+		let height = (bounds["Height"] as? NSNumber)?.doubleValue
+	else {
+		continue
+	}
+	if width >= 80, width <= 240, height >= 20, height <= 80 {
+		exit(0)
+	}
+}
+
+exit(1)
+SWIFT
+}
+
+ensure_asr_active_binary() {
+	if [ -x "$ASR_ACTIVE_BIN" ] && [ ! -f "$ASR_ACTIVE_SWIFT_SOURCE" ]; then
+		return 0
+	fi
+	[ -n "$SWIFTC_BIN" ] || {
+		log "asr detector compile skipped: swiftc_missing"
+		return 1
+	}
+	/bin/mkdir -p "$HUD_DIR"
+	local tmp_source="$STATE_DIR/asr-active.$$.swift.tmp"
+	write_asr_active_source "$tmp_source"
+	if [ ! -f "$ASR_ACTIVE_SWIFT_SOURCE" ] || ! cmp -s "$tmp_source" "$ASR_ACTIVE_SWIFT_SOURCE"; then
+		/bin/mv "$tmp_source" "$ASR_ACTIVE_SWIFT_SOURCE"
+	else
+		/bin/rm -f "$tmp_source"
+	fi
+	if [ ! -x "$ASR_ACTIVE_BIN" ] || [ "$ASR_ACTIVE_SWIFT_SOURCE" -nt "$ASR_ACTIVE_BIN" ]; then
+		local tmp_bin="$STATE_DIR/asr-active.$$.tmp"
+		"$SWIFTC_BIN" "$ASR_ACTIVE_SWIFT_SOURCE" -o "$tmp_bin" >/dev/null 2>&1 || {
+			log "asr detector compile failed"
+			/bin/rm -f "$tmp_bin" "$ASR_ACTIVE_BIN"
+			return 1
+		}
+		/bin/chmod +x "$tmp_bin"
+		/bin/mv "$tmp_bin" "$ASR_ACTIVE_BIN"
+	fi
+	[ -x "$ASR_ACTIVE_BIN" ]
+}
+
+# 0 = listening, 1 = idle, 2 = detector unavailable.
+asr_state() {
+	if [ ! -x "$ASR_ACTIVE_BIN" ]; then
+		ensure_asr_active_binary >/dev/null 2>&1 || return 2
+	fi
+	"$ASR_ACTIVE_BIN" >/dev/null 2>&1
+	case $? in
+	0) return 0 ;;
+	1) return 1 ;;
+	*) return 2 ;;
+	esac
+}
+
+session_engine() {
+	local engine
+	engine="$(read_file engine)"
+	[ -n "$engine" ] || engine="$TRANSCRIPTION_ENGINE"
+	printf '%s' "$engine"
+}
+
+prepare_transcription_engine() {
+	[ "$TRANSCRIPTION_ENGINE" = "doubao" ] || return 0
+	ensure_asr_active_binary >/dev/null 2>&1 || log "asr detector unavailable"
+}
+
 load_optional_config
+case "${DJI_TRANSCRIPTION_ENGINE:-typeless}" in
+doubao) TRANSCRIPTION_ENGINE=doubao ;;
+*) TRANSCRIPTION_ENGINE=typeless ;;
+esac
 DJI_ENABLE_AUDIO_FEEDBACK="$(normalize_toggle "$DJI_ENABLE_AUDIO_FEEDBACK" 1)"
 DJI_PRECONFIRM_SOUND_NAME="$(normalize_sound_name "$DJI_PRECONFIRM_SOUND_NAME")"
 DJI_ENABLE_READY_HUD="$(normalize_toggle "$DJI_ENABLE_READY_HUD" 1)"
@@ -788,7 +895,7 @@ cleanup() {
 		return 0
 	fi
 	dismiss_ready_hud "$expected_session_id"
-	/bin/rm -f "$STATE_DIR"/{mode,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,window_deadline,save_in_progress}
+	/bin/rm -f "$STATE_DIR"/{mode,engine,pane_id,watcher.pid,pending_confirm,save_ts,db_anchor_rowid,db_anchor_updated_at,ready_hud.pid,session_id,window_deadline,save_in_progress}
 }
 
 set_vars() { "$KCLI" --set-variables "$1" 2>/dev/null; }
@@ -1044,6 +1151,13 @@ gui_send_enter() {
 }
 
 transcript_ready_since_save() {
+	if [ "$(session_engine)" = "doubao" ]; then
+		asr_state
+		case $? in
+		1) return 0 ;;
+		*) return 1 ;;
+		esac
+	fi
 	[ -f "$STATE_DIR/save_ts" ] || return 1
 	local anchor_rowid
 	local anchor_updated_at
@@ -1089,7 +1203,55 @@ send_current_mode_enter() {
 	return 1
 }
 
-detect_typeless_schema
+[ "$TRANSCRIPTION_ENGINE" = "doubao" ] || detect_typeless_schema
+
+# Doubao mode never reads a transcript database: the recording pill appearing
+# and disappearing is the only reliable signal. The ready window opens even
+# when the stop cannot be confirmed, so the third press is never swallowed.
+watch_doubao() {
+	local mode="$1"
+	local expected_session_id="$2"
+	local polls=0
+	local state=2
+	log "watch mode=${mode} engine=doubao save_ts=$(read_file save_ts) polling"
+	reuse_or_open_send_window "watch ${mode}" "$expected_session_id"
+
+	while [ $polls -lt "$ASR_STOP_POLLS" ]; do
+		session_is_current "$expected_session_id" || exit 0
+		asr_state
+		state=$?
+		[ $state -ne 0 ] && break
+		/bin/sleep "$ASR_POLL_INTERVAL"
+		polls=$((polls + 1))
+	done
+	session_is_current "$expected_session_id" || exit 0
+
+	if [ $state -eq 1 ]; then
+		log "watch ${mode} dictation_stopped (${polls} polls)"
+	elif [ $state -eq 2 ]; then
+		log "watch ${mode} asr_detector_unavailable, arming window anyway"
+	else
+		log "watch ${mode} dictation_stop_unconfirmed (${polls} polls), arming window anyway"
+	fi
+
+	log "watch ${mode} transcript_detected (${polls} polls) grace_window=${PRECONFIRM_GRACE_POLLS}x${PRECONFIRM_GRACE_INTERVAL}s"
+	if wait_for_pending_confirm; then
+		session_is_current "$expected_session_id" || exit 0
+		/bin/sleep "$DELIVERY_DELAY"
+		if send_current_mode_enter "watch ${mode} preconfirm"; then
+			finalize_send_state "$expected_session_id"
+			log "watch ${mode} preconfirm_send (${polls} polls wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s)"
+			cleanup "$expected_session_id"
+		else
+			send_status=$?
+			/bin/rm -f "$STATE_DIR/pending_confirm"
+			log "watch ${mode} preconfirm_failed (${polls} polls wait_polls=${pending_confirm_polls} delay=${DELIVERY_DELAY}s status=${send_status})"
+			enter_ready_window "$mode" "$polls" "$pending_confirm_polls" "$expected_session_id"
+		fi
+	else
+		enter_ready_window "$mode" "$polls" "$pending_confirm_polls" "$expected_session_id"
+	fi
+}
 
 if [ "$1" = "route" ]; then
 	branch="$2"
@@ -1108,9 +1270,13 @@ save)
 	write_file save_in_progress 1
 	save_ts="$(utc_timestamp_ms)"
 	[ -n "$save_ts" ] || save_ts="$(/bin/date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-	anchor_rowid="$(typeless_last_rowid)"
-	[ -n "$anchor_rowid" ] || anchor_rowid=0
-	anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
+	anchor_rowid=""
+	anchor_updated_at=""
+	if [ "$TRANSCRIPTION_ENGINE" != "doubao" ]; then
+		anchor_rowid="$(typeless_last_rowid)"
+		[ -n "$anchor_rowid" ] || anchor_rowid=0
+		anchor_updated_at="$(typeless_row_updated_at "$anchor_rowid")"
+	fi
 	session_id="$(generate_session_id)"
 	[ -n "$session_id" ] || session_id="$$-$(/bin/date +%s)"
 
@@ -1131,12 +1297,14 @@ save)
 	esac
 
 	if [ -n "$pane" ]; then
-		log "save mode=tmux pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} table=${TYPELESS_TABLE}"
+		log "save mode=tmux engine=${TRANSCRIPTION_ENGINE} pane=${pane} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} table=${TYPELESS_TABLE}"
 	else
-		log "save mode=gui app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} table=${TYPELESS_TABLE}"
+		log "save mode=gui engine=${TRANSCRIPTION_ENGINE} app=${front_bundle} save_ts=${save_ts} anchor_rowid=${anchor_rowid} anchor_updated_at=${anchor_updated_at} table=${TYPELESS_TABLE}"
 	fi
 	prepare_send_window_hud_if_enabled
+	prepare_transcription_engine
 	write_file save_ts "$save_ts"
+	write_file engine "$TRANSCRIPTION_ENGINE"
 	write_file db_anchor_rowid "$anchor_rowid"
 	write_file db_anchor_updated_at "$anchor_updated_at"
 	if [ -n "$pane" ]; then
@@ -1159,7 +1327,10 @@ watch)
 	mode="$(wait_for_save_state_value mode)"
 	write_file watcher.pid "$$"
 
-	if [ "$mode" = "tmux" ]; then
+	engine="$(session_engine)"
+	if [ "$engine" = "doubao" ]; then
+		watch_doubao "$mode" "$watch_session_id"
+	elif [ "$mode" = "tmux" ]; then
 		pane="$(wait_for_save_state_value pane_id)"
 		[ -n "$pane" ] || {
 			cleanup "$watch_session_id"
