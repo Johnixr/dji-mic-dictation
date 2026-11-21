@@ -56,6 +56,8 @@ class DictationHarness:
         self.afplay_log = tmp_path / "afplay.log"
         self.hud_log = tmp_path / "hud.log"
         self.swiftc_log = tmp_path / "swiftc.log"
+        self.asr_log = tmp_path / "asr.log"
+        self.asr_sequence_file = tmp_path / "asr-sequence.txt"
 
         self._create_db()
         self._write_stub_bins()
@@ -92,6 +94,12 @@ class DictationHarness:
                 "AFPLAY_LOG_FILE": str(self.afplay_log),
                 "HUD_LOG_FILE": str(self.hud_log),
                 "SWIFTC_LOG_FILE": str(self.swiftc_log),
+                "ASR_ACTIVE_BIN": str(self.bin_dir / "asr-active"),
+                "ASR_LOG_FILE": str(self.asr_log),
+                "FAKE_ASR_EXIT": "1",
+                "FAKE_ASR_SEQUENCE_FILE": str(self.asr_sequence_file),
+                "ASR_POLL_INTERVAL": "0.01",
+                "ASR_STOP_POLLS": "40",
                 "FAKE_WIN_POS": "100 200",
             }
         )
@@ -242,6 +250,30 @@ script.chmod(0o755)
         )
 
         self._write_executable(
+            "asr-active",
+            f"""#!/usr/bin/env {python}
+import os
+from pathlib import Path
+
+log = os.environ["ASR_LOG_FILE"]
+with open(log, "a", encoding="utf-8") as fh:
+    fh.write("call\\n")
+
+sequence_path = os.environ.get("FAKE_ASR_SEQUENCE_FILE", "")
+if sequence_path:
+    path = Path(sequence_path)
+    if path.exists():
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if lines:
+            head, rest = lines[0], lines[1:]
+            path.write_text("\\n".join(rest) + ("\\n" if rest else ""), encoding="utf-8")
+            raise SystemExit(int(head))
+
+raise SystemExit(int(os.environ.get("FAKE_ASR_EXIT", "1")))
+""",
+        )
+
+        self._write_executable(
             "osascript",
             f"""#!/usr/bin/env {python}
 import json
@@ -374,6 +406,13 @@ elif args[:2] == ["-l", "JavaScript"]:
 
     def swiftc_calls(self):
         return self.read_lines(self.swiftc_log)
+
+    def asr_calls(self):
+        return self.read_lines(self.asr_log)
+
+    def write_asr_sequence(self, values):
+        lines = [str(value) for value in values]
+        self.asr_sequence_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 class RealTmuxHarness(DictationHarness):

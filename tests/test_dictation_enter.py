@@ -935,3 +935,80 @@ def test_confirm_gui_sends_enter_and_cleans_up(harness):
         or "write text" in " ".join(call["args"])
         for call in calls
     )
+
+
+def _doubao_config(harness, **extra):
+    harness.write_app_config(
+        DJI_ENABLE_AUDIO_FEEDBACK=0,
+        DJI_PRECONFIRM_SOUND_NAME="",
+        DJI_ENABLE_READY_HUD=1,
+        DJI_TRANSCRIPTION_ENGINE="doubao",
+        **extra,
+    )
+
+
+def test_doubao_save_records_engine_without_reading_typeless(harness):
+    _doubao_config(harness)
+
+    harness.run("save")
+
+    assert harness.read_state("engine") == "doubao"
+    assert harness.read_state("db_anchor_rowid") == ""
+    assert "save mode=gui engine=doubao" in harness.log_text()
+    assert harness.tmux_calls() == []
+
+
+def test_doubao_watch_opens_ready_window_after_recording_stops(harness):
+    harness.env["WAIT_PHASE_DURATION"] = "0.1"
+    harness.env["CONFIRM_WINDOW"] = "0.3"
+    _doubao_config(harness)
+    harness.run("save")
+    harness.write_asr_sequence([0, 0, 0, 1])
+
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=3)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    log_text = harness.log_text()
+    assert "watch mode=gui engine=doubao" in log_text
+    assert "watch gui dictation_stopped" in log_text
+    assert _confirm_send_window_hud_calls(harness) == ["0.3"]
+
+
+def test_doubao_watch_arms_ready_window_even_when_stop_is_unconfirmed(harness):
+    harness.env["WAIT_PHASE_DURATION"] = "0.1"
+    harness.env["CONFIRM_WINDOW"] = "0.3"
+    harness.env["ASR_STOP_POLLS"] = "3"
+    harness.env["FAKE_ASR_EXIT"] = "0"
+    _doubao_config(harness)
+    harness.run("save")
+
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=3)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui dictation_stop_unconfirmed" in harness.log_text()
+    assert _confirm_send_window_hud_calls(harness) == ["0.3"]
+
+
+def test_doubao_preconfirm_queues_until_recording_stops(harness):
+    harness.env["CONFIRM_WINDOW"] = "0.3"
+    _doubao_config(harness)
+    harness.run("save")
+    harness.write_asr_sequence([0, 1])
+
+    harness.run("preconfirm")
+
+    assert "preconfirm queued" in harness.log_text()
+    assert harness.read_state("pending_confirm") == "1"
+    assert not any(
+        "keystroke return" in " ".join(call["args"]) or "write text" in " ".join(call["args"])
+        for call in harness.osascript_calls()
+    )
+
+    proc = harness.popen("watch")
+    stdout, stderr = proc.communicate(timeout=3)
+
+    assert proc.returncode == 0, (stdout, stderr)
+    assert "watch gui preconfirm_send" in harness.log_text()
+    assert harness.read_state("pending_confirm") == ""

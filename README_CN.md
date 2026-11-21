@@ -32,11 +32,19 @@ npx github:johnixr/dji-mic-dictation uninstall
 
 ## 三步上手
 
-### 第一步：装 Typeless（当前版本必需）
+### 第一步：装一个听写引擎
 
-[Typeless](https://www.typeless.com/?via=john-yin) 在 macOS 听写之上加了一层 LLM 智能编辑，自动去除口头禅、修正口误、整理格式，中英文混合也能搞定。
+默认引擎是 [Typeless](https://www.typeless.com/?via=john-yin)。它在 macOS 听写之上加了一层 LLM 智能编辑，自动去除口头禅、修正口误、整理格式，中英文混合也能搞定。
 
 免费版每周 4000 字，Pro 版 $12/月。
+
+如果你本来就用豆包语音输入法，不必再装 Typeless，直接指定豆包引擎安装：
+
+```bash
+npx github:johnixr/dji-mic-dictation install --transcription-engine doubao
+```
+
+豆包模式改为识别录音浮窗，不再读转写数据库。豆包显示「正在优化识别效果」时按下的那一次会排队发送，不会误把语音面板关掉；即使没能确认录音已结束，也照样开出可发送窗口。
 
 ### 第二步：决定是否启用可选硬件触发器
 
@@ -64,6 +72,8 @@ Fn 第 3 下 → 发送 / Enter 到当前 App → AI 开始干活
 
 如果在安装时启用了 DJI 触发器，那么 Mic Mini 按钮会镜像这套同样的流程。
 
+用 `--transcription-engine doubao` 时三次按键完全一致：第一下开始豆包听写，第二下结束，录音浮窗消失后出现可发送窗口。
+
 ## 前置条件
 
 | 需求 | 说明 |
@@ -72,7 +82,8 @@ Fn 第 3 下 → 发送 / Enter 到当前 App → AI 开始干活
 | [Karabiner-Elements](https://karabiner-elements.pqrs.org/) | `brew install --cask karabiner-elements` |
 | DJI Mic Mini | 可选硬件触发器；vendor_id: 11427, product_id: 16401 |
 | macOS 听写 | 系统设置 → 键盘 → 听写 → 开启 |
-| [Typeless](https://www.typeless.com/?via=john-yin) | 当前版本必需，因为检测依赖 Typeless DB |
+| [Typeless](https://www.typeless.com/?via=john-yin) | 默认引擎，检测依赖 Typeless DB；用 `--transcription-engine doubao` 安装可跳过 |
+| 豆包语音输入法 | 可选引擎，安装时指定 `--transcription-engine doubao` |
 
 ## 仓库里有什么
 

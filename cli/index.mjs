@@ -29,7 +29,7 @@ import {
 	uninstall,
 	update,
 } from './lib/actions.mjs';
-import { loadConfig } from './lib/config.mjs';
+import { loadConfig, TRANSCRIPTION_ENGINES } from './lib/config.mjs';
 import { buildInstallProfilePromptPlan } from './lib/install-profile-plan.mjs';
 import {
 	getBlockingPermissionIssues,
@@ -66,6 +66,8 @@ Options:
                          Preconfirm sound name from /System/Library/Sounds, or off
   --ready-overlay on|off Enable or disable the ready-to-send countdown overlay
   --review-window <sec>  Review time after transcript appears before auto-send expires
+  --transcription-engine <name>
+                         Dictation engine: typeless | doubao
   --profile <name>       Target Karabiner profile name
   --clone-profile-from <name>
                          Clone an existing Karabiner profile before installing
@@ -122,6 +124,9 @@ function parseArgs(argv) {
 				break;
 			case '--review-window':
 				flags.reviewWindow = args[++index];
+				break;
+			case '--transcription-engine':
+				flags.transcriptionEngine = args[++index];
 				break;
 			default:
 				throw new Error(`Unknown option: ${arg}`);
@@ -212,11 +217,23 @@ function parsePositiveNumberFlag(value, key) {
 	return parsed;
 }
 
+function parseTranscriptionEngineFlag(value) {
+	if (value == null) {
+		return undefined;
+	}
+	const normalized = String(value).trim().toLowerCase();
+	if (!TRANSCRIPTION_ENGINES.includes(normalized)) {
+		throw new Error(`Invalid value for --transcription-engine: ${value} (use ${TRANSCRIPTION_ENGINES.join(' or ')})`);
+	}
+	return normalized;
+}
+
 function buildConfigOverrides(flags) {
 	const overrides = {};
 	const audioFeedbackEnabled = parseToggle(flags.sound, '--sound');
 	const readyOverlayEnabled = parseToggle(flags.readyOverlay, '--ready-overlay');
 	const reviewWindowSeconds = parsePositiveNumberFlag(flags.reviewWindow, '--review-window');
+	const transcriptionEngine = parseTranscriptionEngineFlag(flags.transcriptionEngine);
 	if (audioFeedbackEnabled === false) {
 		overrides.audioFeedbackEnabled = audioFeedbackEnabled;
 		overrides.preconfirmSoundName = '';
@@ -234,6 +251,9 @@ function buildConfigOverrides(flags) {
 	}
 	if (reviewWindowSeconds != null) {
 		overrides.reviewWindowSeconds = reviewWindowSeconds;
+	}
+	if (transcriptionEngine != null) {
+		overrides.transcriptionEngine = transcriptionEngine;
 	}
 	return overrides;
 }
@@ -424,6 +444,7 @@ function formatDoctorReport(report) {
 		`Karabiner config: ${report.karabinerConfigExists ? 'ok' : 'missing'}`,
 		`script installed: ${report.scriptInstalled ? 'yes' : 'no'}`,
 		`config installed: ${report.configInstalled ? 'yes' : 'no'}`,
+		`transcription engine: ${report.transcriptionEngine}`,
 		`trigger mode: ${formatTriggerMode(report.triggerMode)}`,
 		`device: ${report.connectedDevice.status}`,
 		`managed profiles: ${report.managedProfiles.length ? report.managedProfiles.map((profile) => profile.name).join(', ') : 'none'}`,
